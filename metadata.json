@@ -1,0 +1,6 @@
+{
+  "name": "VoiceGemBrowser",
+  "description": "Voice-first conversational browser powered by Google Gemini AI. Converses verbally with spoken questions and answers.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
