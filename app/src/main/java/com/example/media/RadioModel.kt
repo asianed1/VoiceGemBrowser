@@ -96,9 +96,9 @@ object DefaultRadioStations {
         ),
         RadioStation(
             id = "podcast_slot_6",
-            name = "My Custom Podcast Stream",
-            genre = "User Preferred Audio",
-            streamUrl = "https://classicalmusic.streamguys1.com/classical-mp3",
+            name = "Up First from NPR",
+            genre = "Daily News / Podcast RSS",
+            streamUrl = "https://feeds.npr.org/510318/podcast.xml",
             iconEmoji = "🎧",
             slotNumber = 6,
             isCustomizable = true

@@ -162,4 +162,18 @@ class VoiceGemV7UnitTest {
         assertEquals("Marie Curie", fallback.extractSearchTopic("Who was Marie Curie?"))
         assertEquals("Eiffel Tower", fallback.extractSearchTopic("Tell me about Eiffel Tower"))
     }
+
+    @Test
+    fun testRadioStations_slotsAreCustomizableWithValidHttpsUrls() {
+        assertEquals(6, DefaultRadioStations.DEFAULT_SIX_PODCASTS.size)
+        assertTrue(DefaultRadioStations.DEFAULT_SIX_PODCASTS.all { it.isCustomizable })
+        assertTrue(DefaultRadioStations.DEFAULT_SIX_PODCASTS.all { it.streamUrl.startsWith("https://") })
+        val slot6 = DefaultRadioStations.DEFAULT_SIX_PODCASTS[5]
+        assertEquals("Up First from NPR", slot6.name)
+        assertEquals("https://feeds.npr.org/510318/podcast.xml", slot6.streamUrl)
+
+        assertTrue(DefaultRadioStations.PRESET_STATIONS.none { it.isCustomizable })
+        assertTrue(DefaultRadioStations.PRESET_STATIONS.any { it.id == "npr_live" })
+        assertTrue(DefaultRadioStations.PRESET_STATIONS.any { it.id == "bbc_world" })
+    }
 }

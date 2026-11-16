@@ -39,6 +39,7 @@ import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.example.ui.AssistantState
 import com.example.ui.theme.GemCyan
@@ -58,7 +59,9 @@ fun VoiceGemOrb(
     state: AssistantState,
     rmsLevel: Float,
     onClick: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    containerSize: Dp = 204.dp,
+    bodySize: Dp = 152.dp
 ) {
     val infiniteTransition = rememberInfiniteTransition(label = "gem_orb_fx")
 
@@ -129,7 +132,7 @@ fun VoiceGemOrb(
     Box(
         contentAlignment = Alignment.Center,
         modifier = modifier
-            .size(240.dp)
+            .size(containerSize)
             .testTag("voice_gem_orb_container")
     ) {
         // Outer concentric audio ripples (when listening)
@@ -185,7 +188,7 @@ fun VoiceGemOrb(
         Box(
             contentAlignment = Alignment.Center,
             modifier = Modifier
-                .size(170.dp)
+                .size(bodySize)
                 .scale(currentScale)
                 .shadow(
                     elevation = 28.dp,

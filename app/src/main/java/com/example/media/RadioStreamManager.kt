@@ -4,6 +4,7 @@ import android.content.Context
 import android.media.AudioAttributes
 import android.media.MediaPlayer
 import android.util.Log
+import android.net.Uri
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -16,6 +17,7 @@ import kotlinx.coroutines.launch
 
 class RadioStreamManager(context: Context) {
 
+    private val appContext = context.applicationContext
     private var mediaPlayer: MediaPlayer? = null
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private var playbackJob: Job? = null
@@ -50,7 +52,15 @@ class RadioStreamManager(context: Context) {
                             .setUsage(AudioAttributes.USAGE_MEDIA)
                             .build()
                     )
-                    setDataSource(audioUrl)
+                    try {
+                        setDataSource(
+                            appContext,
+                            Uri.parse(audioUrl),
+                            mapOf("User-Agent" to "Dalvik/2.1.0 (Linux; U; Android) VoiceGemBrowser/9.0")
+                        )
+                    } catch (_: Exception) {
+                        setDataSource(audioUrl)
+                    }
                     setOnPreparedListener { mp ->
                         _isLoading.value = false
                         mp.start()

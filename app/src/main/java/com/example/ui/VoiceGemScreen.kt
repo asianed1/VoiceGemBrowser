@@ -25,6 +25,7 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import android.app.Activity
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
@@ -33,13 +34,11 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.CallEnd
-import androidx.compose.material.icons.filled.Forum
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Key
 import androidx.compose.material.icons.filled.Keyboard
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.automirrored.filled.VolumeUp
-import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.Bluetooth
@@ -48,8 +47,6 @@ import androidx.compose.material.icons.filled.Email
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Radio
-import androidx.compose.material3.Badge
-import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -58,9 +55,11 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -72,15 +71,19 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
+import com.example.BuildConfig
 import com.example.ui.components.AccountSubscriptionSheet
 import com.example.ui.components.AudioSettingsDialog
 import com.example.ui.components.CarStereoAudioSheet
@@ -108,6 +111,7 @@ fun VoiceGemScreen(
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
+    val haptic = LocalHapticFeedback.current
     val state by viewModel.assistantState.collectAsState()
     val rmsLevel by viewModel.rmsLevel.collectAsState()
     val liveTranscript by viewModel.liveTranscript.collectAsState()
@@ -184,16 +188,40 @@ fun VoiceGemScreen(
                             )
                         }
                         Column {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                Text(
+                                    text = "VoiceGem",
+                                    fontSize = 18.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = Color.White,
+                                    maxLines = 1
+                                )
+                                Box(
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(8.dp))
+                                        .background(GemCyan.copy(alpha = 0.16f))
+                                        .border(1.dp, GemCyan.copy(alpha = 0.55f), RoundedCornerShape(8.dp))
+                                        .padding(horizontal = 6.dp, vertical = 2.dp)
+                                        .testTag("app_version_badge")
+                                ) {
+                                    Text(
+                                        text = "v${BuildConfig.VERSION_NAME}",
+                                        fontSize = 10.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = GemCyan,
+                                        maxLines = 1
+                                    )
+                                }
+                            }
                             Text(
-                                text = "VoiceGem",
-                                fontSize = 19.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = Color.White
-                            )
-                            Text(
-                                text = "Voice-First Conversational Browser",
+                                text = "Voice-First Browser",
                                 fontSize = 11.sp,
-                                color = GemCyan.copy(alpha = 0.85f)
+                                color = GemCyan.copy(alpha = 0.85f),
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
                             )
                         }
                     }
@@ -202,6 +230,7 @@ fun VoiceGemScreen(
                     // Gemini API Key & Account settings pill
                     Box(
                         modifier = Modifier
+                            .minimumInteractiveComponentSize()
                             .clip(RoundedCornerShape(14.dp))
                             .background(if (userProfile.hasCustomApiKey) GemEmerald.copy(alpha = 0.15f) else GemDarkCard)
                             .border(
@@ -209,8 +238,11 @@ fun VoiceGemScreen(
                                 if (userProfile.hasCustomApiKey) GemEmerald.copy(alpha = 0.6f) else GemCardBorder,
                                 RoundedCornerShape(14.dp)
                             )
-                            .clickable { showAccountSheet = true }
-                            .padding(horizontal = 9.dp, vertical = 6.dp)
+                            .clickable {
+                                haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                showAccountSheet = true
+                            }
+                            .padding(horizontal = 10.dp, vertical = 7.dp)
                             .testTag("account_limit_pill")
                     ) {
                         Row(
@@ -227,93 +259,26 @@ fun VoiceGemScreen(
                                 text = if (userProfile.hasCustomApiKey) "Custom API" else "Gemini API",
                                 fontSize = 11.sp,
                                 fontWeight = FontWeight.SemiBold,
-                                color = if (userProfile.hasCustomApiKey) GemEmerald else Color.White
+                                color = if (userProfile.hasCustomApiKey) GemEmerald else Color.White,
+                                maxLines = 1
                             )
                         }
                     }
 
-                    // Incoming Messages sheet button with badge
+                    // History sheet button (only secondary icon kept in TopBar)
                     IconButton(
-                        onClick = { showMessagesSheet = true },
-                        modifier = Modifier.testTag("open_messages_button")
-                    ) {
-                        BadgedBox(
-                            badge = {
-                                if (unreadMessagesCount > 0) {
-                                    Badge(
-                                        containerColor = GemRose,
-                                        contentColor = Color.White
-                                    ) {
-                                        Text(unreadMessagesCount.toString(), fontSize = 10.sp, fontWeight = FontWeight.Bold)
-                                    }
-                                }
-                            }
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.Email,
-                                contentDescription = "Message Summaries",
-                                tint = if (unreadMessagesCount > 0) GemRose else TextSecondaryLight
-                            )
-                        }
-                    }
-
-                    // Radio Stations & Audio Focus button
-                    IconButton(
-                        onClick = { showRadioSheet = true },
-                        modifier = Modifier.testTag("open_radio_button")
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Radio,
-                            contentDescription = "Radio & Podcasts",
-                            tint = if (isRadioPlaying) GemCyan else TextSecondaryLight
-                        )
-                    }
-
-                    // Car Stereo & Bluetooth Audio button
-                    IconButton(
-                        onClick = { showCarAudioSheet = true },
-                        modifier = Modifier.testTag("open_car_audio_button")
-                    ) {
-                        Icon(
-                            imageVector = if (carAudioStatus.isConnected) Icons.Default.DirectionsCar else Icons.Default.Bluetooth,
-                            contentDescription = "Car Stereo Playback",
-                            tint = if (carAudioStatus.isConnected) GemEmerald else TextSecondaryLight
-                        )
-                    }
-
-                    // History sheet button
-                    IconButton(
-                        onClick = { showHistorySheet = true },
-                        modifier = Modifier.testTag("open_history_button")
+                        onClick = {
+                            haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                            showHistorySheet = true
+                        },
+                        modifier = Modifier
+                            .size(48.dp)
+                            .testTag("open_history_button")
                     ) {
                         Icon(
                             imageVector = Icons.Default.History,
                             contentDescription = "Conversation History",
                             tint = if (history.isNotEmpty()) GemCyan else TextSecondaryLight
-                        )
-                    }
-
-                    // Settings dialog button
-                    IconButton(
-                        onClick = { showSettingsDialog = true },
-                        modifier = Modifier.testTag("open_settings_button")
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Settings,
-                            contentDescription = "Voice Settings",
-                            tint = TextSecondaryLight
-                        )
-                    }
-
-                    // Exit / End Chat button
-                    IconButton(
-                        onClick = { showExitDialog = true },
-                        modifier = Modifier.testTag("exit_chat_top_button")
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.CallEnd,
-                            contentDescription = "Exit / End Chat",
-                            tint = GemRose
                         )
                     }
                 },
@@ -329,11 +294,19 @@ fun VoiceGemScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(innerPadding)
-                .padding(horizontal = 20.dp)
-                .verticalScroll(rememberScrollState()),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.SpaceBetween
+                .padding(horizontal = 16.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
         ) {
+            // Flexible Middle Hero Zone: scrolls cleanly on compact screens while keeping bottom cockpit decks pinned!
+            Column(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth()
+                    .widthIn(max = 600.dp)
+                    .verticalScroll(rememberScrollState()),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.SpaceEvenly
+            ) {
             // Permission request banner if microphone access is needed
             if (!hasMicPermission) {
                 Card(
@@ -548,14 +521,19 @@ fun VoiceGemScreen(
                 }
             }
 
-            Spacer(modifier = Modifier.height(16.dp))
+            Spacer(modifier = Modifier.height(6.dp))
 
             // The Glowing Centerpiece Voice Gem Orb
             VoiceGemOrb(
                 state = state,
                 rmsLevel = rmsLevel,
-                onClick = { viewModel.onGemOrbClicked() },
-                modifier = Modifier.padding(vertical = 12.dp)
+                onClick = {
+                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                    viewModel.onGemOrbClicked()
+                },
+                containerSize = 196.dp,
+                bodySize = 148.dp,
+                modifier = Modifier.padding(vertical = 4.dp)
             )
 
             // Spoken Transcription / Live Voice Card
@@ -641,20 +619,62 @@ fun VoiceGemScreen(
                 }
             }
 
-            Spacer(modifier = Modifier.weight(1f, fill = false))
-            Spacer(modifier = Modifier.height(16.dp))
+            Spacer(modifier = Modifier.height(8.dp))
+            } // End scrollable Hero Zone
 
-            // Bottom Control Toolbar
-            BottomControlsBar(
-                state = state,
-                autoListen = autoListen,
-                onToggleAutoListen = { viewModel.setAutoListen(!autoListen) },
-                onOpenKeyboard = { showTextInputDialog = true },
-                onEndChat = { showExitDialog = true },
-                onMainActionClick = { viewModel.onGemOrbClicked() }
-            )
+            // Lower Cockpit Thumb Zone: 2 Fixed-Position Tactile Decks (Never Shift!)
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .widthIn(max = 600.dp)
+                    .padding(top = 8.dp, bottom = 10.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                // Deck 1: 4 Large Equal Feature Tiles (Messages, Radio, Car BT, Settings)
+                CockpitFeatureTilesRow(
+                    unreadMessagesCount = unreadMessagesCount,
+                    isRadioActive = isRadioPlaying || isRadioLoading,
+                    isCarConnected = carAudioStatus.isConnected,
+                    onOpenMessages = {
+                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                        showMessagesSheet = true
+                    },
+                    onOpenRadio = {
+                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                        showRadioSheet = true
+                    },
+                    onOpenCarAudio = {
+                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                        showCarAudioSheet = true
+                    },
+                    onOpenSettings = {
+                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                        showSettingsDialog = true
+                    }
+                )
 
-            Spacer(modifier = Modifier.height(16.dp))
+                // Deck 2: Anchored Bottom Action & Hang-Up Dock (Type | Auto | Tap to Speak | End)
+                BottomControlsBar(
+                    state = state,
+                    autoListen = autoListen,
+                    onToggleAutoListen = {
+                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                        viewModel.setAutoListen(!autoListen)
+                    },
+                    onOpenKeyboard = {
+                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                        showTextInputDialog = true
+                    },
+                    onEndChat = {
+                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                        showExitDialog = true
+                    },
+                    onMainActionClick = {
+                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                        viewModel.onGemOrbClicked()
+                    }
+                )
+            }
         }
     }
 
@@ -847,7 +867,9 @@ private fun VoiceConversationHUD(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(18.dp)
+                .heightIn(min = 76.dp, max = 148.dp)
+                .verticalScroll(rememberScrollState())
+                .padding(14.dp)
         ) {
             // Live speech transcription or active question
             if (liveTranscript.isNotBlank() || currentQuestion.isNotBlank()) {
@@ -872,23 +894,25 @@ private fun VoiceConversationHUD(
                 Spacer(modifier = Modifier.height(4.dp))
                 Text(
                     text = if (liveTranscript.isNotBlank()) liveTranscript else currentQuestion,
-                    fontSize = 16.sp,
+                    fontSize = 15.sp,
                     fontWeight = FontWeight.Normal,
                     color = Color.White,
-                    lineHeight = 22.sp
+                    lineHeight = 20.sp
                 )
-                Spacer(modifier = Modifier.height(12.dp))
+                Spacer(modifier = Modifier.height(10.dp))
             }
 
             // VoiceGem Spoken Response section
             if (spokenAnswer.isNotBlank()) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(1.dp)
-                        .background(GemCardBorder.copy(alpha = 0.5f))
-                )
-                Spacer(modifier = Modifier.height(12.dp))
+                if (liveTranscript.isNotBlank() || currentQuestion.isNotBlank()) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(1.dp)
+                            .background(GemCardBorder.copy(alpha = 0.5f))
+                    )
+                    Spacer(modifier = Modifier.height(10.dp))
+                }
 
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -950,11 +974,11 @@ private fun VoiceConversationHUD(
                     }
                 }
 
-                Spacer(modifier = Modifier.height(6.dp))
+                Spacer(modifier = Modifier.height(4.dp))
                 Text(
                     text = spokenAnswer,
                     fontSize = 15.sp,
-                    lineHeight = 22.sp,
+                    lineHeight = 21.sp,
                     color = Color.White.copy(alpha = 0.95f)
                 )
             } else if (state == AssistantState.IDLE) {
@@ -971,6 +995,146 @@ private fun VoiceConversationHUD(
 }
 
 @Composable
+private fun CockpitFeatureTilesRow(
+    unreadMessagesCount: Int,
+    isRadioActive: Boolean,
+    isCarConnected: Boolean,
+    onOpenMessages: () -> Unit,
+    onOpenRadio: () -> Unit,
+    onOpenCarAudio: () -> Unit,
+    onOpenSettings: () -> Unit
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        val messagesColor = if (unreadMessagesCount > 0) GemRose else TextSecondaryLight
+        CockpitTileButton(
+            icon = Icons.Default.Email,
+            label = "Messages",
+            tint = messagesColor,
+            isHighlighted = unreadMessagesCount > 0,
+            badgeCount = unreadMessagesCount,
+            contentDescription = "Message Summaries",
+            onClick = onOpenMessages,
+            modifier = Modifier
+                .weight(1f)
+                .testTag("open_messages_button")
+        )
+
+        val radioColor = if (isRadioActive) GemCyan else TextSecondaryLight
+        CockpitTileButton(
+            icon = Icons.Default.Radio,
+            label = "Radio",
+            tint = radioColor,
+            isHighlighted = isRadioActive,
+            badgeCount = 0,
+            contentDescription = "Radio & Podcasts",
+            onClick = onOpenRadio,
+            modifier = Modifier
+                .weight(1f)
+                .testTag("open_radio_button")
+        )
+
+        val carColor = if (isCarConnected) GemEmerald else TextSecondaryLight
+        CockpitTileButton(
+            icon = if (isCarConnected) Icons.Default.DirectionsCar else Icons.Default.Bluetooth,
+            label = "Car BT",
+            tint = carColor,
+            isHighlighted = isCarConnected,
+            badgeCount = 0,
+            contentDescription = "Car Stereo Playback",
+            onClick = onOpenCarAudio,
+            modifier = Modifier
+                .weight(1f)
+                .testTag("open_car_audio_button")
+        )
+
+        CockpitTileButton(
+            icon = Icons.Default.Settings,
+            label = "Settings",
+            tint = TextSecondaryLight,
+            isHighlighted = false,
+            badgeCount = 0,
+            contentDescription = "Voice Settings",
+            onClick = onOpenSettings,
+            modifier = Modifier
+                .weight(1f)
+                .testTag("open_settings_button")
+        )
+    }
+}
+
+@Composable
+private fun CockpitTileButton(
+    icon: ImageVector,
+    label: String,
+    tint: Color,
+    isHighlighted: Boolean,
+    badgeCount: Int,
+    contentDescription: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val bgColor = if (isHighlighted) tint.copy(alpha = 0.14f) else GemDarkSurface
+    val borderColor = if (isHighlighted) tint.copy(alpha = 0.7f) else GemCardBorder
+
+    Surface(
+        onClick = onClick,
+        shape = RoundedCornerShape(16.dp),
+        color = bgColor,
+        border = androidx.compose.foundation.BorderStroke(1.dp, borderColor),
+        modifier = modifier.height(68.dp)
+    ) {
+        Box(
+            modifier = Modifier.fillMaxSize(),
+            contentAlignment = Alignment.Center
+        ) {
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center,
+                modifier = Modifier.padding(horizontal = 4.dp)
+            ) {
+                Icon(
+                    imageVector = icon,
+                    contentDescription = contentDescription,
+                    tint = if (isHighlighted) tint else Color.White.copy(alpha = 0.88f),
+                    modifier = Modifier.size(24.dp)
+                )
+                Spacer(modifier = Modifier.height(5.dp))
+                Text(
+                    text = label,
+                    fontSize = 11.sp,
+                    fontWeight = if (isHighlighted) FontWeight.Bold else FontWeight.SemiBold,
+                    color = if (isHighlighted) tint else Color.White.copy(alpha = 0.9f),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+
+            if (badgeCount > 0) {
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .padding(top = 6.dp, end = 8.dp)
+                        .clip(CircleShape)
+                        .background(GemRose)
+                        .padding(horizontal = 6.dp, vertical = 1.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = badgeCount.toString(),
+                        color = Color.White,
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
 private fun BottomControlsBar(
     state: AssistantState,
     autoListen: Boolean,
@@ -980,102 +1144,147 @@ private fun BottomControlsBar(
     onMainActionClick: () -> Unit
 ) {
     Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(24.dp))
-            .background(GemDarkSurface)
-            .border(1.dp, GemCardBorder, RoundedCornerShape(24.dp))
-            .padding(horizontal = 14.dp, vertical = 10.dp),
-        horizontalArrangement = Arrangement.SpaceBetween,
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        // Keyboard fallback button
-        IconButton(
+        // 1. Bottom-Left: Type / Keyboard fallback button (68dp)
+        Surface(
             onClick = onOpenKeyboard,
+            shape = RoundedCornerShape(16.dp),
+            color = GemDarkSurface,
+            border = androidx.compose.foundation.BorderStroke(1.dp, GemCardBorder),
             modifier = Modifier
-                .size(42.dp)
-                .clip(CircleShape)
-                .background(GemDarkCard)
+                .weight(0.85f)
+                .height(68.dp)
                 .testTag("keyboard_input_button")
         ) {
-            Icon(
-                imageVector = Icons.Default.Keyboard,
-                contentDescription = "Type Question",
-                tint = GemCyan,
-                modifier = Modifier.size(19.dp)
-            )
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Keyboard,
+                    contentDescription = "Type Question",
+                    tint = GemCyan,
+                    modifier = Modifier.size(22.dp)
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = "Type",
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = Color.White,
+                    maxLines = 1
+                )
+            }
         }
 
-        // End / Exit Chat button
-        IconButton(
-            onClick = onEndChat,
+        // 2. Auto-Listen toggle button (68dp)
+        Surface(
+            onClick = onToggleAutoListen,
+            shape = RoundedCornerShape(16.dp),
+            color = if (autoListen) GemViolet.copy(alpha = 0.22f) else GemDarkSurface,
+            border = androidx.compose.foundation.BorderStroke(
+                1.dp,
+                if (autoListen) GemViolet else GemCardBorder
+            ),
             modifier = Modifier
-                .size(42.dp)
-                .clip(CircleShape)
-                .background(GemRose.copy(alpha = 0.2f))
-                .border(1.dp, GemRose.copy(alpha = 0.45f), CircleShape)
-                .testTag("end_chat_bottom_button")
+                .weight(0.85f)
+                .height(68.dp)
+                .testTag("auto_listen_toggle_button")
         ) {
-            Icon(
-                imageVector = Icons.Default.CallEnd,
-                contentDescription = "End Chat",
-                tint = GemRose,
-                modifier = Modifier.size(19.dp)
-            )
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center
+            ) {
+                Icon(
+                    imageVector = Icons.AutoMirrored.Filled.VolumeUp,
+                    contentDescription = if (autoListen) "Hands-Free Auto-Listen ON" else "Hands-Free OFF",
+                    tint = if (autoListen) GemViolet else TextSecondaryLight,
+                    modifier = Modifier.size(22.dp)
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = if (autoListen) "Auto" else "Manual",
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = if (autoListen) GemViolet else TextSecondaryLight,
+                    maxLines = 1
+                )
+            }
         }
 
-        // Main Center Voice Action Button
+        // 3. Wide Center Primary Voice Action Button (68dp)
         val (actionIcon, actionLabel, actionColor) = when (state) {
-            AssistantState.LISTENING -> Triple(Icons.Default.Stop, "Listening…", GemEmerald)
+            AssistantState.LISTENING -> Triple(Icons.Default.Stop, "Stop", GemEmerald)
             AssistantState.SPEAKING -> Triple(Icons.Default.Stop, "Interrupt", GemRose)
-            AssistantState.PROCESSING -> Triple(Icons.Default.AutoAwesome, "Thinking…", GemCyan)
+            AssistantState.PROCESSING -> Triple(Icons.Default.AutoAwesome, "Cancel", GemCyan)
             AssistantState.IDLE, AssistantState.ERROR -> Triple(Icons.Default.Mic, "Tap to Speak", GemCyan)
         }
 
-        Button(
+        Surface(
             onClick = onMainActionClick,
-            shape = RoundedCornerShape(20.dp),
-            colors = ButtonDefaults.buttonColors(
-                containerColor = actionColor.copy(alpha = 0.2f)
-            ),
+            shape = RoundedCornerShape(18.dp),
+            color = actionColor.copy(alpha = 0.18f),
             border = androidx.compose.foundation.BorderStroke(1.5.dp, actionColor),
-            modifier = Modifier.testTag("main_action_button")
+            modifier = Modifier
+                .weight(1.85f)
+                .height(68.dp)
+                .testTag("main_action_button")
         ) {
-            Icon(
-                imageVector = actionIcon,
-                contentDescription = null,
-                tint = actionColor,
-                modifier = Modifier.size(18.dp)
-            )
-            Spacer(modifier = Modifier.width(6.dp))
-            Text(
-                text = actionLabel,
-                color = actionColor,
-                fontWeight = FontWeight.Bold,
-                fontSize = 13.sp
-            )
+            Row(
+                horizontalArrangement = Arrangement.Center,
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.padding(horizontal = 8.dp)
+            ) {
+                Icon(
+                    imageVector = actionIcon,
+                    contentDescription = actionLabel,
+                    tint = actionColor,
+                    modifier = Modifier.size(22.dp)
+                )
+                Spacer(modifier = Modifier.width(6.dp))
+                Text(
+                    text = actionLabel,
+                    color = actionColor,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 13.sp,
+                    maxLines = 1
+                )
+            }
         }
 
-        // Hands-Free Dialogue mode toggle
-        Box(
+        // 4. Bottom-Right Corner: Unmistakable Crimson Hang-Up / End button (68dp)
+        Surface(
+            onClick = onEndChat,
+            shape = RoundedCornerShape(16.dp),
+            color = GemRose.copy(alpha = 0.24f),
+            border = androidx.compose.foundation.BorderStroke(1.5.dp, GemRose),
             modifier = Modifier
-                .size(42.dp)
-                .clip(CircleShape)
-                .background(if (autoListen) GemViolet.copy(alpha = 0.25f) else GemDarkCard)
-                .border(
-                    1.dp,
-                    if (autoListen) GemViolet else GemCardBorder,
-                    CircleShape
-                )
-                .clickable { onToggleAutoListen() },
-            contentAlignment = Alignment.Center
+                .weight(0.95f)
+                .height(68.dp)
+                .testTag("end_chat_bottom_button")
         ) {
-            Icon(
-                imageVector = Icons.AutoMirrored.Filled.VolumeUp,
-                contentDescription = if (autoListen) "Hands-Free Auto-Listen ON" else "Hands-Free OFF",
-                tint = if (autoListen) GemViolet else TextSecondaryLight,
-                modifier = Modifier.size(19.dp)
-            )
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center
+            ) {
+                Icon(
+                    imageVector = Icons.Default.CallEnd,
+                    contentDescription = "End Chat / Hang Up",
+                    tint = GemRose,
+                    modifier = Modifier.size(22.dp)
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = "End",
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = GemRose,
+                    maxLines = 1
+                )
+            }
         }
     }
 }

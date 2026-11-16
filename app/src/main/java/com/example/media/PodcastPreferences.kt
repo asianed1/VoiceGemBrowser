@@ -23,17 +23,24 @@ class PodcastPreferences(context: Context) {
                 for (i in 0 until jsonArray.length()) {
                     val obj = jsonArray.getJSONObject(i)
                     val slotNum = obj.optInt("slotNumber", i + 1)
-                    list.add(
-                        RadioStation(
-                            id = obj.optString("id", "podcast_slot_$slotNum"),
-                            name = obj.optString("name", "Podcast Slot $slotNum"),
-                            genre = obj.optString("genre", "Podcast"),
-                            streamUrl = obj.optString("streamUrl", ""),
-                            iconEmoji = obj.optString("iconEmoji", "🎙️"),
-                            slotNumber = slotNum,
-                            isCustomizable = true
+                    val rawUrl = obj.optString("streamUrl", "")
+                    val isBrokenLegacySlot6 = slotNum == 6 &&
+                        rawUrl == "https://classicalmusic.streamguys1.com/classical-mp3"
+                    if (isBrokenLegacySlot6) {
+                        list.add(DefaultRadioStations.DEFAULT_SIX_PODCASTS[5])
+                    } else {
+                        list.add(
+                            RadioStation(
+                                id = obj.optString("id", "podcast_slot_$slotNum"),
+                                name = obj.optString("name", "Podcast Slot $slotNum"),
+                                genre = obj.optString("genre", "Podcast"),
+                                streamUrl = rawUrl,
+                                iconEmoji = obj.optString("iconEmoji", "🎙️"),
+                                slotNumber = slotNum,
+                                isCustomizable = true
+                            )
                         )
-                    )
+                    }
                 }
                 if (list.size == 6) {
                     return list
