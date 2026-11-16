@@ -154,14 +154,14 @@ fun GoogleAuthOnboardingDialog(
                         Spacer(modifier = Modifier.width(10.dp))
                         Column {
                             Text(
-                                text = "Free Non-Subscriber Usage",
+                                text = "Shared Default Gemini Key",
                                 fontSize = 13.sp,
                                 fontWeight = FontWeight.SemiBold,
                                 color = Color.White
                             )
                             Spacer(modifier = Modifier.height(3.dp))
                             Text(
-                                text = "Includes 25 free spoken queries daily. Usage is subject to daily limits for non-subscribers. You can upgrade to Unlimited anytime.",
+                                text = "Uses the shared default key (subject to Google daily rate limits). Heavy users can use their own Gemini API key.",
                                 fontSize = 11.sp,
                                 lineHeight = 16.sp,
                                 color = TextSecondaryLight

@@ -176,4 +176,52 @@ class VoiceGemV7UnitTest {
         assertTrue(DefaultRadioStations.PRESET_STATIONS.any { it.id == "npr_live" })
         assertTrue(DefaultRadioStations.PRESET_STATIONS.any { it.id == "bbc_world" })
     }
+
+    @Test
+    fun testMediaFocusCoordinator_autoResumesAfterMessageDigestAndVoiceTurn() {
+        val coordinator = com.example.media.MediaFocusCoordinator()
+        coordinator.onMediaStarted()
+
+        // Assistant speaks unread messages digest; SpeechRecognizer transiently takes focus
+        coordinator.onVoiceTurnStarted()
+        val transientLoss = coordinator.onMediaFocusLostTransient(canDuck = false)
+        assertEquals(com.example.media.MediaFocusCoordinator.FocusAction.PAUSE_TRANSIENT, transientLoss)
+
+        // Premature OS gain while voice turn is still active should wait until turn completes
+        assertEquals(com.example.media.MediaFocusCoordinator.FocusAction.NONE, coordinator.onMediaFocusRegained())
+
+        // Voice turn finishes -> must automatically resume podcast
+        assertEquals(
+            com.example.media.MediaFocusCoordinator.FocusAction.RESUME_AND_UNDUCK,
+            coordinator.onVoiceTurnEnded()
+        )
+    }
+
+    @Test
+    fun testMediaFocusCoordinator_respectsManualPauseAndStop() {
+        val coordinator = com.example.media.MediaFocusCoordinator()
+        coordinator.onMediaStarted()
+        coordinator.onMediaManuallyPaused()
+
+        assertEquals(
+            com.example.media.MediaFocusCoordinator.FocusAction.NONE,
+            coordinator.onMediaFocusLostTransient(canDuck = false)
+        )
+        assertEquals(
+            com.example.media.MediaFocusCoordinator.FocusAction.NONE,
+            coordinator.onVoiceTurnEnded()
+        )
+    }
+
+    @Test
+    fun testStreamRecoveryPolicy_retriesTransientSignalDropsAndStopsAtMax() {
+        assertTrue(com.example.media.StreamRecoveryPolicy.shouldReconnectAfterError(shouldBePlaying = true, attemptCount = 0))
+        assertTrue(com.example.media.StreamRecoveryPolicy.shouldReconnectAfterError(shouldBePlaying = true, attemptCount = 2))
+        assertFalse(com.example.media.StreamRecoveryPolicy.shouldReconnectAfterError(shouldBePlaying = true, attemptCount = 3))
+        assertFalse(com.example.media.StreamRecoveryPolicy.shouldReconnectAfterError(shouldBePlaying = false, attemptCount = 0))
+
+        assertEquals(2_000L, com.example.media.StreamRecoveryPolicy.nextRetryDelayMs(0))
+        assertEquals(4_000L, com.example.media.StreamRecoveryPolicy.nextRetryDelayMs(1))
+        assertEquals(6_000L, com.example.media.StreamRecoveryPolicy.nextRetryDelayMs(2))
+    }
 }

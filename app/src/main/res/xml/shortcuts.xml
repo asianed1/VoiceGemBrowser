@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
+    <shortcut
+        android:shortcutId="voicegem_listen"
+        android:enabled="true"
+        android:icon="@mipmap/ic_launcher"
+        android:shortcutShortLabel="@string/shortcut_voicegem_short"
+        android:shortcutLongLabel="@string/shortcut_voicegem_long">
+        <intent
+            android:action="android.intent.action.VIEW"
+            android:data="voicegem://listen"
+            android:targetPackage="com.aistudio.voicegembrowser.qvxr"
+            android:targetClass="com.example.MainActivity" />
+        <categories android:name="android.shortcut.conversation" />
+    </shortcut>
+</shortcuts>

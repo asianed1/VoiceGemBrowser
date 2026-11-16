@@ -45,10 +45,13 @@ import com.example.ui.theme.GemViolet
 import com.example.ui.theme.TextSecondaryLight
 import com.example.voice.VoiceGenderPreference
 
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.layout.Box
+import androidx.compose.material.icons.filled.Mic
+
 @Composable
 fun AudioSettingsDialog(
-    autoListen: Boolean,
-    onAutoListenChange: (Boolean) -> Unit,
     voiceGender: VoiceGenderPreference,
     onVoiceGenderChange: (VoiceGenderPreference) -> Unit,
     speechRate: Float,
@@ -91,36 +94,37 @@ fun AudioSettingsDialog(
                     .testTag("audio_settings_dialog"),
                 verticalArrangement = Arrangement.spacedBy(16.dp)
             ) {
-                // Auto-listen toggle
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
+                // Single-Turn Privacy & Hands-Free Guide
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(GemDarkCard, RoundedCornerShape(14.dp))
+                        .border(1.dp, GemCyan.copy(alpha = 0.35f), RoundedCornerShape(14.dp))
+                        .padding(12.dp)
                 ) {
-                    Column(modifier = Modifier.weight(1f)) {
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                imageVector = Icons.Default.Mic,
+                                contentDescription = null,
+                                tint = GemCyan,
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = "Privacy & Battery Mic Mode",
+                                fontWeight = FontWeight.SemiBold,
+                                color = Color.White,
+                                fontSize = 14.sp
+                            )
+                        }
                         Text(
-                            text = "Hands-Free Dialogue",
-                            fontWeight = FontWeight.SemiBold,
-                            color = Color.White,
-                            fontSize = 15.sp
-                        )
-                        Text(
-                            text = "Automatically listens for your follow-up question after speaking answers",
+                            text = "Microphone opens for 5s on launch, then stays OFF after replies to protect privacy and save battery. Tap Speak, tap the Gem, or say \"Hey Google, open VoiceGem\" anytime.",
                             color = TextSecondaryLight,
-                            fontSize = 12.sp
+                            fontSize = 12.sp,
+                            lineHeight = 16.sp
                         )
                     }
-                    Switch(
-                        checked = autoListen,
-                        onCheckedChange = onAutoListenChange,
-                        colors = SwitchDefaults.colors(
-                            checkedThumbColor = Color.Black,
-                            checkedTrackColor = GemCyan,
-                            uncheckedThumbColor = TextSecondaryLight,
-                            uncheckedTrackColor = GemDarkCard
-                        ),
-                        modifier = Modifier.testTag("auto_listen_switch")
-                    )
                 }
 
                 // American Voice Selector (Male vs. Female)

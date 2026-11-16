@@ -2,6 +2,7 @@ package com.example.ui
 
 import android.Manifest
 import android.content.pm.PackageManager
+import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
@@ -119,17 +120,16 @@ fun VoiceGemScreen(
     val spokenAnswer by viewModel.spokenAnswer.collectAsState()
     val statusText by viewModel.statusText.collectAsState()
     val history by viewModel.conversationHistory.collectAsState()
-    val autoListen by viewModel.autoListen.collectAsState()
     val speechRate by viewModel.speechRate.collectAsState()
     val pitch by viewModel.pitch.collectAsState()
     val hasMicPermission by viewModel.hasMicPermission.collectAsState()
     val userProfile by viewModel.userProfile.collectAsState()
     val showOnboarding by viewModel.showOnboarding.collectAsState()
-
     val isRadioPlaying by viewModel.isRadioPlaying.collectAsState()
     val isRadioLoading by viewModel.isRadioLoading.collectAsState()
     val currentRadioStation by viewModel.currentRadioStation.collectAsState()
     val isRadioDucked by viewModel.isRadioDucked.collectAsState()
+    val radioStatusDetail by viewModel.radioStatusDetail.collectAsState()
     val preferredPodcasts by viewModel.preferredPodcasts.collectAsState()
     val unreadMessagesCount by viewModel.unreadMessagesCount.collectAsState()
     val capturedMessages by viewModel.capturedMessages.collectAsState()
@@ -141,7 +141,6 @@ fun VoiceGemScreen(
     var showSettingsDialog by remember { mutableStateOf(false) }
     var showTextInputDialog by remember { mutableStateOf(false) }
     var showAccountSheet by remember { mutableStateOf(false) }
-    var showExitDialog by remember { mutableStateOf(false) }
     var showRadioSheet by remember { mutableStateOf(false) }
     var showMessagesSheet by remember { mutableStateOf(false) }
     var showCarAudioSheet by remember { mutableStateOf(false) }
@@ -151,6 +150,23 @@ fun VoiceGemScreen(
         contract = ActivityResultContracts.RequestPermission()
     ) { isGranted ->
         viewModel.onPermissionResult(isGranted)
+    }
+
+    // Android 13+ playback notification permission launcher (requested politely when starting radio/podcast)
+    val notificationPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { _ -> }
+
+    fun ensurePlaybackNotificationPermission() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            val granted = ContextCompat.checkSelfPermission(
+                context,
+                Manifest.permission.POST_NOTIFICATIONS
+            ) == PackageManager.PERMISSION_GRANTED
+            if (!granted) {
+                notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+            }
+        }
     }
 
     LaunchedEffect(Unit) {
@@ -430,7 +446,13 @@ fun VoiceGemScreen(
                                     color = Color.White
                                 )
                                 Text(
-                                    text = if (isRadioDucked) "Voice Priority: Ducked to 15%" else if (isRadioPlaying) "Live Stream (100% Vol)" else "Paused",
+                                    text = when {
+                                        !radioStatusDetail.isNullOrBlank() -> radioStatusDetail!!
+                                        isRadioDucked -> "Voice Priority: Ducked to 15%"
+                                        isRadioLoading -> "Buffering stream…"
+                                        isRadioPlaying -> "Live Stream (100% Vol)"
+                                        else -> "Paused — tap ▶ to resume"
+                                    },
                                     fontSize = 11.sp,
                                     color = if (isRadioDucked) GemViolet else GemCyan.copy(alpha = 0.8f)
                                 )
@@ -653,21 +675,16 @@ fun VoiceGemScreen(
                     }
                 )
 
-                // Deck 2: Anchored Bottom Action & Hang-Up Dock (Type | Auto | Tap to Speak | End)
+                // Deck 2: Anchored Clean 3-Button Action & Hang-Up Dock (Type | Tap to Speak | End)
                 BottomControlsBar(
                     state = state,
-                    autoListen = autoListen,
-                    onToggleAutoListen = {
-                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                        viewModel.setAutoListen(!autoListen)
-                    },
                     onOpenKeyboard = {
                         haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                         showTextInputDialog = true
                     },
                     onEndChat = {
                         haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                        showExitDialog = true
+                        viewModel.endChat(spokenFarewell = true)
                     },
                     onMainActionClick = {
                         haptic.performHapticFeedback(HapticFeedbackType.LongPress)
@@ -690,8 +707,6 @@ fun VoiceGemScreen(
 
     if (showSettingsDialog) {
         AudioSettingsDialog(
-            autoListen = autoListen,
-            onAutoListenChange = { viewModel.setAutoListen(it) },
             voiceGender = voiceGender,
             onVoiceGenderChange = { viewModel.setVoiceGender(it, speakConfirmation = false) },
             speechRate = speechRate,
@@ -733,20 +748,6 @@ fun VoiceGemScreen(
         )
     }
 
-    if (showExitDialog) {
-        ExitChatDialog(
-            onDismiss = { showExitDialog = false },
-            onEndChatOnly = {
-                showExitDialog = false
-                viewModel.endChat(spokenFarewell = true)
-            },
-            onCloseApp = {
-                showExitDialog = false
-                viewModel.exitApplication(context as? Activity)
-            }
-        )
-    }
-
     if (showRadioSheet) {
         RadioStationsSheet(
             isPlaying = isRadioPlaying,
@@ -754,8 +755,14 @@ fun VoiceGemScreen(
             currentStation = currentRadioStation,
             isDucked = isRadioDucked,
             preferredPodcasts = preferredPodcasts,
-            onSelectStation = { station -> viewModel.playRadioStation(station) },
-            onTogglePlayPause = { viewModel.toggleRadioPlayPause() },
+            onSelectStation = { station ->
+                ensurePlaybackNotificationPermission()
+                viewModel.playRadioStation(station)
+            },
+            onTogglePlayPause = {
+                ensurePlaybackNotificationPermission()
+                viewModel.toggleRadioPlayPause()
+            },
             onStopRadio = { viewModel.stopRadio() },
             onUpdatePodcastSlot = { slotNum, name, genre, url, emoji ->
                 viewModel.updatePodcastSlot(slotNum, name, genre, url, emoji)
@@ -983,7 +990,7 @@ private fun VoiceConversationHUD(
                 )
             } else if (state == AssistantState.IDLE) {
                 Text(
-                    text = "VoiceGem Browser accepts any search question or inquiry and answers you verbally. Speak naturally to continue your conversation.",
+                    text = "Mic stays off to protect privacy and save battery. Tap Speak, tap the Gem, or say \"Hey Google, open VoiceGem\" when ready.",
                     fontSize = 13.sp,
                     color = TextSecondaryLight,
                     textAlign = TextAlign.Center,
@@ -1137,8 +1144,6 @@ private fun CockpitTileButton(
 @Composable
 private fun BottomControlsBar(
     state: AssistantState,
-    autoListen: Boolean,
-    onToggleAutoListen: () -> Unit,
     onOpenKeyboard: () -> Unit,
     onEndChat: () -> Unit,
     onMainActionClick: () -> Unit
@@ -1155,7 +1160,7 @@ private fun BottomControlsBar(
             color = GemDarkSurface,
             border = androidx.compose.foundation.BorderStroke(1.dp, GemCardBorder),
             modifier = Modifier
-                .weight(0.85f)
+                .weight(0.95f)
                 .height(68.dp)
                 .testTag("keyboard_input_button")
         ) {
@@ -1180,44 +1185,9 @@ private fun BottomControlsBar(
             }
         }
 
-        // 2. Auto-Listen toggle button (68dp)
-        Surface(
-            onClick = onToggleAutoListen,
-            shape = RoundedCornerShape(16.dp),
-            color = if (autoListen) GemViolet.copy(alpha = 0.22f) else GemDarkSurface,
-            border = androidx.compose.foundation.BorderStroke(
-                1.dp,
-                if (autoListen) GemViolet else GemCardBorder
-            ),
-            modifier = Modifier
-                .weight(0.85f)
-                .height(68.dp)
-                .testTag("auto_listen_toggle_button")
-        ) {
-            Column(
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.Center
-            ) {
-                Icon(
-                    imageVector = Icons.AutoMirrored.Filled.VolumeUp,
-                    contentDescription = if (autoListen) "Hands-Free Auto-Listen ON" else "Hands-Free OFF",
-                    tint = if (autoListen) GemViolet else TextSecondaryLight,
-                    modifier = Modifier.size(22.dp)
-                )
-                Spacer(modifier = Modifier.height(4.dp))
-                Text(
-                    text = if (autoListen) "Auto" else "Manual",
-                    fontSize = 11.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    color = if (autoListen) GemViolet else TextSecondaryLight,
-                    maxLines = 1
-                )
-            }
-        }
-
-        // 3. Wide Center Primary Voice Action Button (68dp)
+        // 2. Wide Center Primary Voice Action Button (68dp)
         val (actionIcon, actionLabel, actionColor) = when (state) {
-            AssistantState.LISTENING -> Triple(Icons.Default.Stop, "Stop", GemEmerald)
+            AssistantState.LISTENING -> Triple(Icons.Default.Stop, "Stop Mic", GemEmerald)
             AssistantState.SPEAKING -> Triple(Icons.Default.Stop, "Interrupt", GemRose)
             AssistantState.PROCESSING -> Triple(Icons.Default.AutoAwesome, "Cancel", GemCyan)
             AssistantState.IDLE, AssistantState.ERROR -> Triple(Icons.Default.Mic, "Tap to Speak", GemCyan)
@@ -1229,7 +1199,7 @@ private fun BottomControlsBar(
             color = actionColor.copy(alpha = 0.18f),
             border = androidx.compose.foundation.BorderStroke(1.5.dp, actionColor),
             modifier = Modifier
-                .weight(1.85f)
+                .weight(2.15f)
                 .height(68.dp)
                 .testTag("main_action_button")
         ) {
@@ -1249,13 +1219,13 @@ private fun BottomControlsBar(
                     text = actionLabel,
                     color = actionColor,
                     fontWeight = FontWeight.Bold,
-                    fontSize = 13.sp,
+                    fontSize = 14.sp,
                     maxLines = 1
                 )
             }
         }
 
-        // 4. Bottom-Right Corner: Unmistakable Crimson Hang-Up / End button (68dp)
+        // 3. Bottom-Right Corner: Immediate Crimson Hang-Up / End button (68dp, no confirm popup)
         Surface(
             onClick = onEndChat,
             shape = RoundedCornerShape(16.dp),
@@ -1272,7 +1242,7 @@ private fun BottomControlsBar(
             ) {
                 Icon(
                     imageVector = Icons.Default.CallEnd,
-                    contentDescription = "End Chat / Hang Up",
+                    contentDescription = "End Conversation / Turn Off Mic",
                     tint = GemRose,
                     modifier = Modifier.size(22.dp)
                 )
@@ -1287,76 +1257,4 @@ private fun BottomControlsBar(
             }
         }
     }
-}
-
-@Composable
-fun ExitChatDialog(
-    onDismiss: () -> Unit,
-    onEndChatOnly: () -> Unit,
-    onCloseApp: () -> Unit
-) {
-    androidx.compose.material3.AlertDialog(
-        onDismissRequest = onDismiss,
-        containerColor = GemDarkSurface,
-        shape = RoundedCornerShape(24.dp),
-        title = {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(
-                    imageVector = Icons.Default.CallEnd,
-                    contentDescription = null,
-                    tint = GemRose,
-                    modifier = Modifier.size(24.dp)
-                )
-                Spacer(modifier = Modifier.width(10.dp))
-                Text("End Voice Chat?", fontWeight = FontWeight.Bold, color = Color.White, fontSize = 20.sp)
-            }
-        },
-        text = {
-            Column(modifier = Modifier.testTag("exit_chat_dialog")) {
-                Text(
-                    text = "Would you like to end the current voice conversation and put VoiceGem to sleep, or close the application completely?",
-                    color = Color.White.copy(alpha = 0.9f),
-                    fontSize = 14.sp,
-                    lineHeight = 20.sp
-                )
-                Spacer(modifier = Modifier.height(12.dp))
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(12.dp))
-                        .background(GemDarkCard)
-                        .padding(10.dp)
-                ) {
-                    Text(
-                        text = "Voice tip: You can also just say \"Goodbye\", \"Bye\", or \"Exit\" anytime to end conversation naturally.",
-                        fontSize = 12.sp,
-                        color = GemCyan
-                    )
-                }
-            }
-        },
-        confirmButton = {
-            Button(
-                onClick = onEndChatOnly,
-                colors = ButtonDefaults.buttonColors(containerColor = GemRose),
-                shape = RoundedCornerShape(12.dp),
-                modifier = Modifier.testTag("confirm_end_chat_button")
-            ) {
-                Text("End Chat", color = Color.White, fontWeight = FontWeight.Bold)
-            }
-        },
-        dismissButton = {
-            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                androidx.compose.material3.TextButton(
-                    onClick = onCloseApp,
-                    modifier = Modifier.testTag("close_app_button")
-                ) {
-                    Text("Close App", color = TextSecondaryLight)
-                }
-                androidx.compose.material3.TextButton(onClick = onDismiss) {
-                    Text("Cancel", color = GemCyan)
-                }
-            }
-        }
-    )
 }

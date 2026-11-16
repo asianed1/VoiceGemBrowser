@@ -4,7 +4,9 @@
     <string name="status_listening">Listening for your question…</string>
     <string name="status_processing">Consulting Gemini…</string>
     <string name="status_speaking">VoiceGem speaking…</string>
-    <string name="status_ready">Tap or speak to ask anything</string>
+    <string name="status_ready">Mic off · Tap Speak, Gem, or Hey Google</string>
     <string name="permission_rationale">VoiceGemBrowser is an entirely voice-first conversational AI browser. Microphone access is required to listen to your spoken questions.</string>
     <string name="grant_permission">Grant Microphone Access</string>
+    <string name="shortcut_voicegem_short">VoiceGem</string>
+    <string name="shortcut_voicegem_long">Open VoiceGem Mic</string>
 </resources>

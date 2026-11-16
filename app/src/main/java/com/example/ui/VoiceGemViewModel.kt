@@ -19,6 +19,7 @@ import com.example.media.CarAudioRoutingMode
 import com.example.media.CarAudioStatus
 import com.example.media.DefaultRadioStations
 import com.example.media.PodcastPreferences
+import com.example.media.RadioServiceBridge
 import com.example.media.RadioStation
 import com.example.media.RadioStreamManager
 import com.example.media.VoiceAudioFocusManager
@@ -59,6 +60,7 @@ class VoiceGemViewModel(application: Application) : AndroidViewModel(application
     val isRadioLoading: StateFlow<Boolean> = radioManager.isLoading
     val currentRadioStation: StateFlow<RadioStation?> = radioManager.currentStation
     val isRadioDucked: StateFlow<Boolean> = radioManager.isDucked
+    val radioStatusDetail: StateFlow<String?> = radioManager.streamStatusDetail
 
     // 6 Preferred Customizable Podcast Sources
     val podcastPreferences = PodcastPreferences(application)
@@ -75,20 +77,33 @@ class VoiceGemViewModel(application: Application) : AndroidViewModel(application
     private val audioFocusManager = VoiceAudioFocusManager(
         context = application,
         onDuckChange = { shouldDuck -> radioManager.duck(shouldDuck) },
-        onPauseRequested = { radioManager.pause() },
-        onResumeRequested = { radioManager.resume() }
+        onPauseRequested = { isPermanent ->
+            radioManager.pause()
+            if (isPermanent) {
+                _statusText.value = "Playback paused for another audio app."
+            }
+        },
+        onResumeRequested = {
+            radioManager.resume()
+        }
     )
 
     // Bluetooth Car Stereo & Audio Routing Manager
     val bluetoothCarManager = BluetoothCarAudioManager(
         context = application,
         onBecomingNoisy = {
+            audioFocusManager.onMediaManuallyPaused()
             radioManager.pause()
             voiceSpeaker.stop()
             _statusText.value = "Car audio disconnected. Playback paused."
         }
     )
     val carAudioStatus: StateFlow<CarAudioStatus> = bluetoothCarManager.status
+
+    init {
+        RadioServiceBridge.onTogglePlayPause = { toggleRadioPlayPause() }
+        RadioServiceBridge.onStopPlayback = { stopRadio() }
+    }
 
     val userProfile: StateFlow<UserProfile> = userManager.userProfile
 
@@ -116,9 +131,6 @@ class VoiceGemViewModel(application: Application) : AndroidViewModel(application
     private val _conversationHistory = MutableStateFlow<List<ChatMessage>>(emptyList())
     val conversationHistory: StateFlow<List<ChatMessage>> = _conversationHistory.asStateFlow()
 
-    private val _autoListen = MutableStateFlow(true)
-    val autoListen: StateFlow<Boolean> = _autoListen.asStateFlow()
-
     private val _speechRate = MutableStateFlow(1.05f)
     val speechRate: StateFlow<Float> = _speechRate.asStateFlow()
 
@@ -135,6 +147,9 @@ class VoiceGemViewModel(application: Application) : AndroidViewModel(application
     val pendingGoogleSearchQuery: StateFlow<String?> = _pendingGoogleSearchQuery.asStateFlow()
 
     private var hasGreeted = false
+    private var preferDirectListenOnFirstStart = false
+    private var hasDetectedSpeechInTurn = false
+    private var listeningWatchdogJob: Job? = null
     private var geminiJob: Job? = null
 
     private val voiceSpeaker = VoiceSpeaker(application) {
@@ -152,10 +167,12 @@ class VoiceGemViewModel(application: Application) : AndroidViewModel(application
         listener = object : VoiceRecognizer.Callback {
             override fun onReady() {
                 _assistantState.value = AssistantState.LISTENING
-                _statusText.value = "Listening for your voice…"
+                _statusText.value = "Listening (5s window)…"
             }
 
             override fun onSpeechStarted() {
+                hasDetectedSpeechInTurn = true
+                listeningWatchdogJob?.cancel()
                 _statusText.value = "Listening…"
             }
 
@@ -164,22 +181,26 @@ class VoiceGemViewModel(application: Application) : AndroidViewModel(application
             }
 
             override fun onPartialText(partial: String) {
+                hasDetectedSpeechInTurn = true
+                listeningWatchdogJob?.cancel()
                 _liveTranscript.value = partial
             }
 
             override fun onFinalResult(transcription: String) {
+                hasDetectedSpeechInTurn = true
+                listeningWatchdogJob?.cancel()
                 _rmsLevel.value = 0f
                 _liveTranscript.value = ""
                 processUserQuestion(transcription)
             }
 
             override fun onError(errorCode: Int, message: String) {
+                listeningWatchdogJob?.cancel()
                 _rmsLevel.value = 0f
                 if (_assistantState.value == AssistantState.LISTENING) {
-                    _statusText.value = message
+                    _statusText.value = "Mic off · Tap Speak, Gem, or Hey Google"
                     _assistantState.value = AssistantState.IDLE
-                    radioManager.duck(false)
-                    audioFocusManager.abandonFocus()
+                    audioFocusManager.abandonVoiceFocus()
                 }
             }
         }
@@ -190,6 +211,30 @@ class VoiceGemViewModel(application: Application) : AndroidViewModel(application
         if (granted && !hasGreeted && voiceSpeaker.isReady && !_showOnboarding.value) {
             triggerStartupGreeting()
         }
+    }
+
+    /**
+     * Handles launching or waking VoiceGem via "Hey Google, open VoiceGem" (voicegem://listen)
+     * or Choice B re-open ("Hey Google, open VoiceGemBrowser").
+     */
+    fun onAssistantWakeRequested(skipGreeting: Boolean, isFromNewIntent: Boolean) {
+        if (!isFromNewIntent || !hasGreeted) {
+            if (skipGreeting) {
+                preferDirectListenOnFirstStart = true
+            }
+            if (hasGreeted && _hasMicPermission.value && !_showOnboarding.value) {
+                startListeningSequence()
+            }
+            return
+        }
+
+        if (_showOnboarding.value || !_hasMicPermission.value) return
+        if (_assistantState.value == AssistantState.LISTENING) return
+
+        geminiJob?.cancel()
+        geminiJob = null
+        voiceSpeaker.stop()
+        startListeningSequence()
     }
 
     fun signInWithGoogle(context: Context) {
@@ -236,12 +281,18 @@ class VoiceGemViewModel(application: Application) : AndroidViewModel(application
     }
 
     /**
-     * Requirement: When turned on, the app will beep and say: "How may I help you today?"
-     * then listens for the user's question.
+     * Startup instance only: plays startup greeting ("How may I help you today?")
+     * then opens the mic once for up to 5 seconds before turning off.
      */
     fun triggerStartupGreeting() {
         if (hasGreeted) return
         hasGreeted = true
+
+        if (preferDirectListenOnFirstStart) {
+            preferDirectListenOnFirstStart = false
+            startListeningSequence()
+            return
+        }
 
         viewModelScope.launch {
             delay(300)
@@ -276,27 +327,45 @@ class VoiceGemViewModel(application: Application) : AndroidViewModel(application
 
     private fun startListeningSequence() {
         if (!_hasMicPermission.value) return
+        listeningWatchdogJob?.cancel()
+        hasDetectedSpeechInTurn = false
+
         voiceSpeaker.stop()
         audioFocusManager.requestVoicePriorityFocus()
         radioManager.duck(true)
         soundFx.playListeningCue()
         _assistantState.value = AssistantState.LISTENING
-        _statusText.value = "Listening for your question…"
+        _statusText.value = "Listening (5s window)…"
         _liveTranscript.value = ""
         voiceRecognizer.startListening()
+
+        // Hard 5-second silence auto-off timer so the mic never stays open unintentionally
+        listeningWatchdogJob = viewModelScope.launch {
+            delay(LISTENING_SILENCE_TIMEOUT_MS)
+            if (_assistantState.value == AssistantState.LISTENING && !hasDetectedSpeechInTurn) {
+                voiceRecognizer.cancel()
+                _rmsLevel.value = 0f
+                _liveTranscript.value = ""
+                _assistantState.value = AssistantState.IDLE
+                _statusText.value = "Mic off · Tap Speak, Gem, or Hey Google"
+                audioFocusManager.abandonVoiceFocus()
+            }
+        }
     }
 
     fun onGemOrbClicked() {
         when (_assistantState.value) {
             AssistantState.LISTENING -> {
+                listeningWatchdogJob?.cancel()
                 voiceRecognizer.stopListening()
                 if (_liveTranscript.value.isNotBlank()) {
                     processUserQuestion(_liveTranscript.value)
                 } else {
+                    voiceRecognizer.cancel()
+                    _rmsLevel.value = 0f
                     _assistantState.value = AssistantState.IDLE
-                    _statusText.value = "Tap the Gem to ask a question"
-                    radioManager.duck(false)
-                    audioFocusManager.abandonFocus()
+                    _statusText.value = "Mic off · Tap Speak, Gem, or Hey Google"
+                    audioFocusManager.abandonVoiceFocus()
                 }
             }
             AssistantState.SPEAKING -> {
@@ -307,9 +376,8 @@ class VoiceGemViewModel(application: Application) : AndroidViewModel(application
                 geminiJob?.cancel()
                 geminiJob = null
                 _assistantState.value = AssistantState.IDLE
-                _statusText.value = "Request canceled. Tap to ask again."
-                radioManager.duck(false)
-                audioFocusManager.abandonFocus()
+                _statusText.value = "Mic off · Tap Speak, Gem, or Hey Google"
+                audioFocusManager.abandonVoiceFocus()
             }
             AssistantState.IDLE, AssistantState.ERROR -> {
                 startListeningSequence()
@@ -363,7 +431,7 @@ class VoiceGemViewModel(application: Application) : AndroidViewModel(application
 
         // 4. 100% Local Radio & Podcast Stream Voice Commands
         if (LocalCommandParser.isStopAudioCommand(normalized)) {
-            radioManager.stop()
+            stopRadio()
             _currentQuestion.value = question
             val msg = "Audio playback stopped."
             _spokenAnswer.value = msg
@@ -479,8 +547,7 @@ class VoiceGemViewModel(application: Application) : AndroidViewModel(application
                             text = offlineMessage,
                             onDone = {
                                 _assistantState.value = AssistantState.IDLE
-                                radioManager.duck(false)
-                                audioFocusManager.abandonFocus()
+                                audioFocusManager.abandonVoiceFocus()
                             }
                         )
                     }
@@ -492,10 +559,10 @@ class VoiceGemViewModel(application: Application) : AndroidViewModel(application
     fun openPendingGoogleSearch(context: Context) {
         val query = _pendingGoogleSearchQuery.value ?: return
         _pendingGoogleSearchQuery.value = null
+        listeningWatchdogJob?.cancel()
         voiceRecognizer.stopListening()
         voiceSpeaker.stop()
-        radioManager.duck(false)
-        audioFocusManager.abandonFocus()
+        audioFocusManager.abandonVoiceFocus()
         _assistantState.value = AssistantState.IDLE
         _statusText.value = "Opened Google Search"
 
@@ -526,6 +593,7 @@ class VoiceGemViewModel(application: Application) : AndroidViewModel(application
     }
 
     private fun speakResponse(response: String) {
+        listeningWatchdogJob?.cancel()
         audioFocusManager.requestVoicePriorityFocus()
         radioManager.duck(true)
 
@@ -540,22 +608,15 @@ class VoiceGemViewModel(application: Application) : AndroidViewModel(application
             },
             onDone = {
                 viewModelScope.launch {
-                    if (_autoListen.value && _hasMicPermission.value) {
-                        delay(400)
-                        startListeningSequence()
-                    } else {
-                        _assistantState.value = AssistantState.IDLE
-                        _statusText.value = "Tap the Gem to continue talking"
-                        radioManager.duck(false)
-                        audioFocusManager.abandonFocus()
-                    }
+                    _assistantState.value = AssistantState.IDLE
+                    _statusText.value = "Mic off · Tap Speak, Gem, or Hey Google"
+                    audioFocusManager.abandonVoiceFocus()
                 }
             },
             onError = {
                 _assistantState.value = AssistantState.IDLE
-                _statusText.value = "Audio playback completed"
-                radioManager.duck(false)
-                audioFocusManager.abandonFocus()
+                _statusText.value = "Mic off · Tap Speak, Gem, or Hey Google"
+                audioFocusManager.abandonVoiceFocus()
             }
         )
     }
@@ -566,6 +627,7 @@ class VoiceGemViewModel(application: Application) : AndroidViewModel(application
      * NEVER leave the Android device, even when an active Internet connection is present.
      */
     fun summarizeIncomingMessages() {
+        listeningWatchdogJob?.cancel()
         voiceRecognizer.stopListening()
         voiceSpeaker.stop()
 
@@ -583,19 +645,23 @@ class VoiceGemViewModel(application: Application) : AndroidViewModel(application
     }
 
     fun playRadioStation(station: RadioStation) {
+        audioFocusManager.requestMediaPlaybackFocus()
         radioManager.playStation(station)
         _statusText.value = "Streaming ${station.name}"
     }
 
     fun toggleRadioPlayPause() {
         if (radioManager.isPlaying.value) {
+            audioFocusManager.onMediaManuallyPaused()
             radioManager.pause()
         } else {
+            audioFocusManager.requestMediaPlaybackFocus()
             radioManager.resume()
         }
     }
 
     fun stopRadio() {
+        audioFocusManager.onMediaManuallyPaused()
         radioManager.stop()
     }
 
@@ -640,10 +706,6 @@ class VoiceGemViewModel(application: Application) : AndroidViewModel(application
         speakResponse(text)
     }
 
-    fun setAutoListen(enabled: Boolean) {
-        _autoListen.value = enabled
-    }
-
     fun setSpeechRate(rate: Float) {
         _speechRate.value = rate
         voiceSpeaker.speechRate = rate
@@ -667,36 +729,47 @@ class VoiceGemViewModel(application: Application) : AndroidViewModel(application
     }
 
     fun endChat(spokenFarewell: Boolean = true) {
+        listeningWatchdogJob?.cancel()
         geminiJob?.cancel()
         geminiJob = null
-        voiceRecognizer.stopListening()
+        voiceRecognizer.cancel()
         voiceSpeaker.stop()
-        radioManager.duck(false)
-        audioFocusManager.abandonFocus()
 
         _liveTranscript.value = ""
+        _rmsLevel.value = 0f
         _pendingGoogleSearchQuery.value = null
         _assistantState.value = AssistantState.IDLE
-        _statusText.value = "Chat ended. Tap the Gem anytime to start."
+        _statusText.value = "Mic off · Tap Speak, Gem, or Hey Google"
         soundFx.playShutdownCue()
 
         if (spokenFarewell) {
+            audioFocusManager.requestVoicePriorityFocus()
+            radioManager.duck(true)
             _assistantState.value = AssistantState.SPEAKING
             voiceSpeaker.speak(
-                text = "Goodbye! Tap the Gem whenever you want to talk again.",
+                text = "Goodbye!",
+                utteranceId = "farewell_${System.currentTimeMillis()}",
                 onDone = {
                     _assistantState.value = AssistantState.IDLE
+                    audioFocusManager.abandonVoiceFocus()
+                },
+                onError = {
+                    _assistantState.value = AssistantState.IDLE
+                    audioFocusManager.abandonVoiceFocus()
                 }
             )
+        } else {
+            audioFocusManager.abandonVoiceFocus()
         }
     }
 
     fun exitApplication(activity: android.app.Activity?) {
+        listeningWatchdogJob?.cancel()
         geminiJob?.cancel()
         voiceRecognizer.destroy()
         voiceSpeaker.shutdown()
         radioManager.release()
-        audioFocusManager.abandonFocus()
+        audioFocusManager.abandonAll()
         bluetoothCarManager.release()
         soundFx.release()
         activity?.finish()
@@ -709,13 +782,20 @@ class VoiceGemViewModel(application: Application) : AndroidViewModel(application
 
     override fun onCleared() {
         super.onCleared()
+        listeningWatchdogJob?.cancel()
         geminiJob?.cancel()
+        RadioServiceBridge.onTogglePlayPause = null
+        RadioServiceBridge.onStopPlayback = null
         voiceRecognizer.destroy()
         voiceSpeaker.shutdown()
         radioManager.release()
-        audioFocusManager.abandonFocus()
+        audioFocusManager.abandonAll()
         bluetoothCarManager.release()
         soundFx.release()
+    }
+
+    companion object {
+        const val LISTENING_SILENCE_TIMEOUT_MS = 5_000L
     }
 }
 

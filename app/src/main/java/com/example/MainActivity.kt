@@ -1,5 +1,6 @@
 package com.example
 
+import android.content.Intent
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -20,6 +21,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        handleLaunchIntent(intent, isNewIntent = false)
         setContent {
             MyApplicationTheme {
                 Surface(
@@ -29,6 +31,30 @@ class MainActivity : ComponentActivity() {
                     VoiceGemScreen(viewModel = viewModel)
                 }
             }
+        }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        handleLaunchIntent(intent, isNewIntent = true)
+    }
+
+    private fun handleLaunchIntent(intent: Intent?, isNewIntent: Boolean) {
+        if (intent == null) return
+        val isVoiceGemDeepLink =
+            intent.action == Intent.ACTION_VIEW &&
+                intent.data?.scheme == "voicegem" &&
+                intent.data?.host == "listen"
+        val isLauncherIntent =
+            intent.action == Intent.ACTION_MAIN &&
+                intent.hasCategory(Intent.CATEGORY_LAUNCHER)
+
+        if (isVoiceGemDeepLink) {
+            viewModel.onAssistantWakeRequested(skipGreeting = true, isFromNewIntent = isNewIntent)
+        } else if (isNewIntent && isLauncherIntent) {
+            // Choice B: Re-opening via "Hey Google, open VoiceGemBrowser" or app icon wakes the 5s mic
+            viewModel.onAssistantWakeRequested(skipGreeting = false, isFromNewIntent = true)
         }
     }
 }
