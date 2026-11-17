@@ -10,6 +10,13 @@ data class RadioStation(
     val isCustomizable: Boolean = false
 )
 
+data class PodcastEpisode(
+    val title: String,
+    val audioUrl: String,
+    val pubDate: String = "",
+    val durationMs: Long = 0L
+)
+
 object DefaultRadioStations {
     // Permanent Built-in Presets (NPR, BBC, and Music Streams)
     val PRESET_STATIONS = listOf(
@@ -47,8 +54,8 @@ object DefaultRadioStations {
         )
     )
 
-    // User's 6 Preferred Customizable Podcast Sources
-    val DEFAULT_SIX_PODCASTS = listOf(
+    // User's 8 Preferred Customizable Podcast Sources
+    val DEFAULT_EIGHT_PODCASTS = listOf(
         RadioStation(
             id = "podcast_slot_1",
             name = "Daily News & Briefing",
@@ -101,6 +108,24 @@ object DefaultRadioStations {
             streamUrl = "https://feeds.npr.org/510318/podcast.xml",
             iconEmoji = "🎧",
             slotNumber = 6,
+            isCustomizable = true
+        ),
+        RadioStation(
+            id = "podcast_slot_7",
+            name = "Planet Money from NPR",
+            genre = "Economics / Podcast RSS",
+            streamUrl = "https://feeds.npr.org/510289/podcast.xml",
+            iconEmoji = "💵",
+            slotNumber = 7,
+            isCustomizable = true
+        ),
+        RadioStation(
+            id = "podcast_slot_8",
+            name = "Short Wave from NPR",
+            genre = "Science / Daily Podcast RSS",
+            streamUrl = "https://feeds.npr.org/510351/podcast.xml",
+            iconEmoji = "🧬",
+            slotNumber = 8,
             isCustomizable = true
         )
     )

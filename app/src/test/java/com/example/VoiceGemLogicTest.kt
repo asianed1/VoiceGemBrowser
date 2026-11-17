@@ -144,11 +144,11 @@ class VoiceGemLogicTest {
     }
 
     @Test
-    fun testPreferredPodcastSlots_exactlySixSlotsAndCustomizable() {
+    fun testPreferredPodcastSlots_exactlyEightSlotsAndCustomizable() {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val prefs = com.example.media.PodcastPreferences(context)
         val slots = prefs.preferredPodcasts.value
-        assertEquals("Must provide exactly 6 preferred podcast slots", 6, slots.size)
+        assertEquals("Must provide exactly 8 preferred podcast slots", 8, slots.size)
         slots.forEachIndexed { index, slot ->
             assertEquals("Slot number should match index + 1", index + 1, slot.slotNumber)
             assertTrue("Podcast slot should be marked customizable", slot.isCustomizable)

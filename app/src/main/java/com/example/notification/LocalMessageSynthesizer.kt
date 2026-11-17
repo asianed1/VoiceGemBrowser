@@ -13,7 +13,16 @@ object LocalMessageSynthesizer {
             return "You have no new messages from WhatsApp, Gmail, Telegram, Viber, Slack, or SMS."
         }
 
-        val totalCount = messages.size
+        // Defense-in-depth: never read OTP / 2FA passcodes aloud even if passed directly
+        val safeMessages = messages.filterNot { msg ->
+            LocalSpamFilter.isSensitiveOtpOr2fa(msg.sender, msg.text)
+        }
+
+        if (safeMessages.isEmpty()) {
+            return "You have no non-sensitive unread messages right now."
+        }
+
+        val totalCount = safeMessages.size
         val header = if (totalCount == 1) {
             "You have 1 unread message."
         } else {
@@ -22,7 +31,7 @@ object LocalMessageSynthesizer {
 
         // Group by appName preserving order of arrival, then by sender within each app
         val groupedByApp = linkedMapOf<String, LinkedHashMap<String, MutableList<String>>>()
-        for (msg in messages) {
+        for (msg in safeMessages) {
             val cleanText = cleanMessageText(msg.text)
             if (cleanText.isBlank()) continue
 

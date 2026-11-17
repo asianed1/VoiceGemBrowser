@@ -36,7 +36,14 @@
 -keep class com.example.data.user.** { *; }
 -keep class com.example.data.repository.** { *; }
 -keep class com.example.media.RadioStation { *; }
+-keep class com.example.media.PodcastEpisode { *; }
+-keep class com.example.media.PodcastSearchResult { *; }
+-keep class com.example.media.ItunesSearchResponse { *; }
+-keep class com.example.media.ItunesPodcastItem { *; }
 -keep class com.example.notification.CapturedMessage { *; }
+-keep class com.example.notification.FilterVerdict { *; }
+-keep class com.example.notification.LocalSpamFilter { *; }
 -keep class com.example.notification.LocalMessageSynthesizer { *; }
+-keep class com.example.security.** { *; }
 -keep class com.example.voice.VoiceGenderPreference { *; }
 -keep class com.example.voice.VoiceSwitchResult { *; }

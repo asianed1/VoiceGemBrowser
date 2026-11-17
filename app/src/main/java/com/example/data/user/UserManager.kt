@@ -8,6 +8,7 @@ import androidx.credentials.GetCredentialRequest
 import androidx.credentials.exceptions.GetCredentialCancellationException
 import androidx.credentials.exceptions.GetCredentialException
 import com.example.BuildConfig
+import com.example.security.SecureKeyStoreHelper
 import com.google.android.libraries.identity.googleid.GetSignInWithGoogleOption
 import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -38,7 +39,12 @@ class UserManager(private val context: Context) {
         val isSignedIn = prefs.getBoolean("is_signed_in", false)
         val displayName = prefs.getString("display_name", "Google User") ?: "Google User"
         val email = prefs.getString("email", "") ?: ""
-        val customKey = prefs.getString("custom_gemini_api_key", "") ?: ""
+
+        val rawCustomKey = prefs.getString("custom_gemini_api_key", "") ?: ""
+        val customKey = SecureKeyStoreHelper.decrypt(rawCustomKey)
+        if (rawCustomKey.isNotBlank() && !SecureKeyStoreHelper.isEncryptedFormat(rawCustomKey)) {
+            prefs.edit().putString("custom_gemini_api_key", SecureKeyStoreHelper.encrypt(customKey)).apply()
+        }
         val hasCustomKey = customKey.isNotBlank()
 
         return UserProfile(
@@ -130,8 +136,9 @@ class UserManager(private val context: Context) {
     }
 
     fun getEffectiveApiKey(): String {
-        val customKey = prefs.getString("custom_gemini_api_key", "")
-        return if (!customKey.isNullOrBlank()) {
+        val rawCustomKey = prefs.getString("custom_gemini_api_key", "") ?: ""
+        val customKey = SecureKeyStoreHelper.decrypt(rawCustomKey)
+        return if (customKey.isNotBlank()) {
             customKey
         } else {
             BuildConfig.GEMINI_API_KEY
@@ -140,7 +147,8 @@ class UserManager(private val context: Context) {
 
     fun setCustomApiKey(key: String) {
         val trimmed = key.trim()
-        prefs.edit().putString("custom_gemini_api_key", trimmed).apply()
+        val stored = if (trimmed.isNotBlank()) SecureKeyStoreHelper.encrypt(trimmed) else ""
+        prefs.edit().putString("custom_gemini_api_key", stored).apply()
         val hasCustom = trimmed.isNotBlank()
         _userProfile.value = _userProfile.value.copy(
             hasCustomApiKey = hasCustom,

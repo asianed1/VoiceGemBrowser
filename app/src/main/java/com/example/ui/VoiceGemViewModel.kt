@@ -7,6 +7,7 @@ import android.content.Intent
 import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.data.api.RetrofitClient
 import com.example.data.model.ChatMessage
 import com.example.data.model.MessageSender
 import com.example.data.repository.FreeKnowledgeFallbackRepository
@@ -18,6 +19,7 @@ import com.example.media.BluetoothCarAudioManager
 import com.example.media.CarAudioRoutingMode
 import com.example.media.CarAudioStatus
 import com.example.media.DefaultRadioStations
+import com.example.media.PodcastEpisode
 import com.example.media.PodcastPreferences
 import com.example.media.RadioServiceBridge
 import com.example.media.RadioStation
@@ -26,6 +28,7 @@ import com.example.media.VoiceAudioFocusManager
 import com.example.notification.CapturedMessage
 import com.example.notification.LocalMessageSynthesizer
 import com.example.notification.NotificationQueueManager
+import com.example.notification.SpamFilterPreferences
 import com.example.voice.SoundFxManager
 import com.example.voice.VoiceGenderPreference
 import com.example.voice.VoiceRecognizer
@@ -54,24 +57,56 @@ class VoiceGemViewModel(application: Application) : AndroidViewModel(application
     private val soundFx = SoundFxManager(application)
     private val userManager = UserManager(application)
 
+    // 8 Preferred Customizable Podcast Sources & Resume State
+    val podcastPreferences = PodcastPreferences(application)
+    val preferredPodcasts: StateFlow<List<RadioStation>> = podcastPreferences.preferredPodcasts
+
     // Radio stream and audio focus
-    val radioManager = RadioStreamManager(application)
+    val radioManager = RadioStreamManager(application, podcastPreferences)
     val isRadioPlaying: StateFlow<Boolean> = radioManager.isPlaying
     val isRadioLoading: StateFlow<Boolean> = radioManager.isLoading
     val currentRadioStation: StateFlow<RadioStation?> = radioManager.currentStation
     val isRadioDucked: StateFlow<Boolean> = radioManager.isDucked
     val radioStatusDetail: StateFlow<String?> = radioManager.streamStatusDetail
+    val podcastEpisodes: StateFlow<List<PodcastEpisode>> = radioManager.episodes
+    val currentEpisodeIndex: StateFlow<Int> = radioManager.currentEpisodeIndex
+    val currentEpisodeTitle: StateFlow<String?> = radioManager.currentEpisodeTitle
+    val currentPositionMs: StateFlow<Long> = radioManager.currentPositionMs
+    val durationMs: StateFlow<Long> = radioManager.durationMs
+    val sleepTimerRemainingSec: StateFlow<Int?> = radioManager.sleepTimerRemainingSec
+    val sleepAtEndOfEpisode: StateFlow<Boolean> = radioManager.sleepAtEndOfEpisode
 
-    // 6 Preferred Customizable Podcast Sources
-    val podcastPreferences = PodcastPreferences(application)
-    val preferredPodcasts: StateFlow<List<RadioStation>> = podcastPreferences.preferredPodcasts
-
-    // Incoming notification queue
+    // Incoming notification queue & on-device spam/OTP protection
+    private val spamFilterPrefs = SpamFilterPreferences(application)
     val unreadMessagesCount: StateFlow<Int> = NotificationQueueManager.unreadCount
     val capturedMessages: StateFlow<List<CapturedMessage>> = NotificationQueueManager.messages
+    val filteredMessages: StateFlow<List<CapturedMessage>> = NotificationQueueManager.filteredMessages
+    val spamFilterEnabled: StateFlow<Boolean> = spamFilterPrefs.spamFilterEnabled
+    val mutedSenders: StateFlow<Set<String>> = spamFilterPrefs.mutedSenders
 
     fun clearCapturedMessages() {
         NotificationQueueManager.clearQueue()
+    }
+
+    fun setSpamFilterEnabled(enabled: Boolean) {
+        spamFilterPrefs.setSpamFilterEnabled(enabled)
+    }
+
+    fun muteMessageSender(sender: String) {
+        spamFilterPrefs.muteSender(sender)
+        NotificationQueueManager.muteSenderFromQueue(sender)
+    }
+
+    fun unmuteMessageSender(sender: String) {
+        spamFilterPrefs.unmuteSender(sender)
+    }
+
+    fun restoreFilteredMessage(messageId: String) {
+        NotificationQueueManager.restoreFilteredMessage(messageId)
+    }
+
+    fun clearFilteredMessages() {
+        NotificationQueueManager.clearFilteredQueue()
     }
 
     private val audioFocusManager = VoiceAudioFocusManager(
@@ -101,8 +136,16 @@ class VoiceGemViewModel(application: Application) : AndroidViewModel(application
     val carAudioStatus: StateFlow<CarAudioStatus> = bluetoothCarManager.status
 
     init {
+        RetrofitClient.configureAppIdentity(application)
         RadioServiceBridge.onTogglePlayPause = { toggleRadioPlayPause() }
+        RadioServiceBridge.onPlay = { resumeRadio() }
+        RadioServiceBridge.onPause = { pauseRadio() }
         RadioServiceBridge.onStopPlayback = { stopRadio() }
+        RadioServiceBridge.onSkipBackward = { seekRadioBy(-15_000L) }
+        RadioServiceBridge.onSkipForward = { seekRadioBy(30_000L) }
+        RadioServiceBridge.onNextEpisode = { nextPodcastEpisode() }
+        RadioServiceBridge.onPreviousEpisode = { previousPodcastEpisode() }
+        RadioServiceBridge.onSeekTo = { posMs -> seekRadioTo(posMs) }
     }
 
     val userProfile: StateFlow<UserProfile> = userManager.userProfile
@@ -385,10 +428,11 @@ class VoiceGemViewModel(application: Application) : AndroidViewModel(application
         }
     }
 
-    fun processUserQuestion(question: String) {
+    fun processUserQuestion(rawQuestion: String) {
+        val question = rawQuestion.trim().take(MAX_QUERY_LENGTH)
         if (question.isBlank()) return
 
-        val normalized = question.trim().lowercase(Locale.US).replace(Regex("""[^a-z0-9\s]"""), "")
+        val normalized = question.lowercase(Locale.US).replace(Regex("""[^a-z0-9\s]"""), "")
 
         // 0. Handle spoken confirmation for pending Visual Google Search handoff (Approach B)
         val pendingQuery = _pendingGoogleSearchQuery.value
@@ -446,6 +490,55 @@ class VoiceGemViewModel(application: Application) : AndroidViewModel(application
             _currentQuestion.value = question
             playRadioStation(matchedStation)
             val msg = "Streaming ${matchedStation.name}."
+            _spokenAnswer.value = msg
+            speakResponse(msg)
+            return
+        }
+
+        // 4b. 100% Local Podcast Seek, Episode Step & Sleep Timer Voice Commands
+        val seekDelta = LocalCommandParser.detectSeekDeltaMs(normalized)
+        if (seekDelta != null && currentRadioStation.value != null) {
+            _currentQuestion.value = question
+            seekRadioBy(seekDelta)
+            val seconds = kotlin.math.abs(seekDelta / 1000L)
+            val dir = if (seekDelta >= 0) "forward" else "back"
+            val msg = "Skipped $dir $seconds seconds."
+            _spokenAnswer.value = msg
+            speakResponse(msg)
+            return
+        }
+
+        val episodeStep = LocalCommandParser.detectEpisodeNavCommand(normalized)
+        if (episodeStep != null && currentRadioStation.value != null) {
+            _currentQuestion.value = question
+            val switched = if (episodeStep > 0) nextPodcastEpisode() else previousPodcastEpisode()
+            val msg = if (switched) {
+                currentEpisodeTitle.value?.let { "Playing $it." } ?: "Switched episode."
+            } else {
+                "No other episode available in this feed."
+            }
+            _spokenAnswer.value = msg
+            speakResponse(msg)
+            return
+        }
+
+        val sleepCmd = LocalCommandParser.detectSleepTimerCommand(normalized)
+        if (sleepCmd != null) {
+            _currentQuestion.value = question
+            val msg = when {
+                sleepCmd == 0 -> {
+                    cancelSleepTimer()
+                    "Sleep timer cancelled."
+                }
+                sleepCmd < 0 -> {
+                    setSleepAtEndOfEpisode()
+                    "Audio will stop at the end of this episode."
+                }
+                else -> {
+                    setSleepTimerMinutes(sleepCmd)
+                    "Sleep timer set for $sleepCmd minutes."
+                }
+            }
             _spokenAnswer.value = msg
             speakResponse(msg)
             return
@@ -650,14 +743,57 @@ class VoiceGemViewModel(application: Application) : AndroidViewModel(application
         _statusText.value = "Streaming ${station.name}"
     }
 
+    fun resumeRadio() {
+        audioFocusManager.requestMediaPlaybackFocus()
+        radioManager.resume()
+    }
+
+    fun pauseRadio() {
+        audioFocusManager.onMediaManuallyPaused()
+        radioManager.pause()
+    }
+
     fun toggleRadioPlayPause() {
         if (radioManager.isPlaying.value) {
-            audioFocusManager.onMediaManuallyPaused()
-            radioManager.pause()
+            pauseRadio()
         } else {
-            audioFocusManager.requestMediaPlaybackFocus()
-            radioManager.resume()
+            resumeRadio()
         }
+    }
+
+    fun seekRadioBy(deltaMs: Long) {
+        radioManager.seekBy(deltaMs)
+    }
+
+    fun seekRadioTo(targetMs: Long) {
+        radioManager.seekTo(targetMs)
+    }
+
+    fun selectPodcastEpisode(index: Int) {
+        audioFocusManager.requestMediaPlaybackFocus()
+        radioManager.selectEpisode(index)
+    }
+
+    fun nextPodcastEpisode(): Boolean {
+        audioFocusManager.requestMediaPlaybackFocus()
+        return radioManager.nextEpisode()
+    }
+
+    fun previousPodcastEpisode(): Boolean {
+        audioFocusManager.requestMediaPlaybackFocus()
+        return radioManager.previousEpisode()
+    }
+
+    fun setSleepTimerMinutes(minutes: Int) {
+        radioManager.setSleepTimerMinutes(minutes)
+    }
+
+    fun setSleepAtEndOfEpisode() {
+        radioManager.setSleepAtEndOfEpisode()
+    }
+
+    fun cancelSleepTimer() {
+        radioManager.cancelSleepTimer()
     }
 
     fun stopRadio() {
@@ -671,8 +807,8 @@ class VoiceGemViewModel(application: Application) : AndroidViewModel(application
         genre: String,
         streamUrl: String,
         iconEmoji: String
-    ) {
-        podcastPreferences.updatePodcastSlot(slotNumber, name, genre, streamUrl, iconEmoji)
+    ): Boolean {
+        return podcastPreferences.updatePodcastSlot(slotNumber, name, genre, streamUrl, iconEmoji)
     }
 
     fun resetPodcastSlot(slotNumber: Int) {
@@ -785,7 +921,14 @@ class VoiceGemViewModel(application: Application) : AndroidViewModel(application
         listeningWatchdogJob?.cancel()
         geminiJob?.cancel()
         RadioServiceBridge.onTogglePlayPause = null
+        RadioServiceBridge.onPlay = null
+        RadioServiceBridge.onPause = null
         RadioServiceBridge.onStopPlayback = null
+        RadioServiceBridge.onSkipBackward = null
+        RadioServiceBridge.onSkipForward = null
+        RadioServiceBridge.onNextEpisode = null
+        RadioServiceBridge.onPreviousEpisode = null
+        RadioServiceBridge.onSeekTo = null
         voiceRecognizer.destroy()
         voiceSpeaker.shutdown()
         radioManager.release()
@@ -796,6 +939,7 @@ class VoiceGemViewModel(application: Application) : AndroidViewModel(application
 
     companion object {
         const val LISTENING_SILENCE_TIMEOUT_MS = 5_000L
+        const val MAX_QUERY_LENGTH = 1500
     }
 }
 
@@ -901,6 +1045,8 @@ object LocalCommandParser {
             normalized.contains("slot 4") || normalized.contains("podcast 4") || normalized.contains("fourth podcast") -> podcastSlots.getOrNull(3)
             normalized.contains("slot 5") || normalized.contains("podcast 5") || normalized.contains("fifth podcast") -> podcastSlots.getOrNull(4)
             normalized.contains("slot 6") || normalized.contains("podcast 6") || normalized.contains("sixth podcast") -> podcastSlots.getOrNull(5)
+            normalized.contains("slot 7") || normalized.contains("podcast 7") || normalized.contains("seventh podcast") -> podcastSlots.getOrNull(6)
+            normalized.contains("slot 8") || normalized.contains("podcast 8") || normalized.contains("eighth podcast") -> podcastSlots.getOrNull(7)
             else -> null
         }
         if (explicitMatch != null) return explicitMatch
@@ -928,6 +1074,46 @@ object LocalCommandParser {
         } else {
             presets.firstOrNull { it.id == "npr_live" }
         }
+    }
+
+    fun detectSeekDeltaMs(normalized: String): Long? {
+        val forwardHints = listOf("skip forward", "fast forward", "jump forward", "forward 30", "ahead 30", "forward 15", "skip ahead")
+        if (forwardHints.any { normalized.contains(it) }) {
+            return if (normalized.contains("15")) 15_000L else 30_000L
+        }
+        val backHints = listOf("rewind", "skip back", "jump back", "go back 15", "back 15", "back 30")
+        if (backHints.any { normalized.contains(it) }) {
+            return if (normalized.contains("30")) -30_000L else -15_000L
+        }
+        return null
+    }
+
+    fun detectEpisodeNavCommand(normalized: String): Int? {
+        return when {
+            normalized == "next episode" || normalized == "play next episode" || normalized == "older episode" -> 1
+            normalized == "previous episode" || normalized == "play previous episode" || normalized == "latest episode" -> -1
+            else -> null
+        }
+    }
+
+    /**
+     * Returns:
+     * - positive minutes (1..180) for timed sleep
+     * - -1 for "end of episode"
+     * - 0 for "cancel sleep timer"
+     * - null if unrelated query
+     */
+    fun detectSleepTimerCommand(normalized: String): Int? {
+        if (!normalized.contains("sleep") && !normalized.contains("stop audio in")) return null
+        if (normalized.contains("cancel sleep") || normalized.contains("turn off sleep") || normalized.contains("stop sleep timer")) {
+            return 0
+        }
+        if (normalized.contains("end of episode") || normalized.contains("after this episode")) {
+            return -1
+        }
+        val match = Regex("""\b(\d{1,3})\s*(?:minute|minutes|min|mins)\b""").find(normalized)
+        val mins = match?.groupValues?.getOrNull(1)?.toIntOrNull()
+        return if (mins != null && mins in 1..180) mins else null
     }
 
     fun extractExplicitGoogleSearch(rawQuery: String): String? {

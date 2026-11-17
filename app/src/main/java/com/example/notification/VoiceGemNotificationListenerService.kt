@@ -7,12 +7,22 @@ import android.util.Log
 
 class VoiceGemNotificationListenerService : NotificationListenerService() {
 
+    private val spamPrefs: SpamFilterPreferences by lazy {
+        SpamFilterPreferences(applicationContext)
+    }
+
     override fun onNotificationPosted(sbn: StatusBarNotification?) {
         super.onNotificationPosted(sbn)
         if (sbn == null) return
 
         val packageName = sbn.packageName ?: return
-        val extras = sbn.notification?.extras ?: return
+        if (packageName == this.packageName) return
+
+        val notification = sbn.notification ?: return
+        if ((notification.flags and Notification.FLAG_ONGOING_EVENT) != 0) return
+        if ((notification.flags and Notification.FLAG_GROUP_SUMMARY) != 0) return
+
+        val extras = notification.extras ?: return
 
         // Known messaging & communication apps
         val isTargetApp = when {
@@ -24,15 +34,15 @@ class VoiceGemNotificationListenerService : NotificationListenerService() {
             packageName.contains("signal", ignoreCase = true) -> true
             packageName.contains("discord", ignoreCase = true) -> true
             packageName.contains("slack", ignoreCase = true) -> true
-            sbn.notification.category == Notification.CATEGORY_MESSAGE -> true
-            sbn.notification.category == Notification.CATEGORY_EMAIL -> true
+            notification.category == Notification.CATEGORY_MESSAGE -> true
+            notification.category == Notification.CATEGORY_EMAIL -> true
             else -> false
         }
 
         if (!isTargetApp) return
 
-        val title = extras.getString(Notification.EXTRA_TITLE) 
-            ?: extras.getCharSequence(Notification.EXTRA_TITLE)?.toString() 
+        val title = extras.getString(Notification.EXTRA_TITLE)
+            ?: extras.getCharSequence(Notification.EXTRA_TITLE)?.toString()
             ?: "Someone"
         val text = extras.getCharSequence(Notification.EXTRA_TEXT)?.toString()
             ?: extras.getCharSequence(Notification.EXTRA_BIG_TEXT)?.toString()
@@ -55,6 +65,14 @@ class VoiceGemNotificationListenerService : NotificationListenerService() {
             }
         }
 
+        val verdict = LocalSpamFilter.evaluate(
+            sender = title,
+            text = text,
+            mutedSenders = spamPrefs.getMutedSendersSync(),
+            mutedKeywords = spamPrefs.getMutedKeywordsSync(),
+            promoFilterEnabled = spamPrefs.isSpamFilterEnabledSync()
+        )
+
         val captured = CapturedMessage(
             packageName = packageName,
             appName = appLabel,
@@ -63,8 +81,24 @@ class VoiceGemNotificationListenerService : NotificationListenerService() {
             timestamp = System.currentTimeMillis()
         )
 
-        Log.d("VoiceGemNotif", "Captured message from $appLabel ($title): $text")
-        NotificationQueueManager.addMessage(captured)
+        when (verdict) {
+            FilterVerdict.BLOCK_OTP_SENSITIVE -> {
+                // Privacy rule: OTP / 2FA codes are dropped silently and never stored, logged, or spoken.
+                Log.d("VoiceGemNotif", "Blocked sensitive verification notification from $appLabel")
+            }
+            FilterVerdict.SPAM_PROMO -> {
+                Log.d("VoiceGemNotif", "Filtered promo notification from $appLabel")
+                NotificationQueueManager.addFilteredMessage(captured, "Promotional / Noise")
+            }
+            FilterVerdict.USER_MUTED -> {
+                Log.d("VoiceGemNotif", "Filtered muted notification from $appLabel")
+                NotificationQueueManager.addFilteredMessage(captured, "Muted Rule")
+            }
+            FilterVerdict.ALLOW -> {
+                Log.d("VoiceGemNotif", "Queued unread message from $appLabel")
+                NotificationQueueManager.addMessage(captured)
+            }
+        }
     }
 
     override fun onListenerConnected() {

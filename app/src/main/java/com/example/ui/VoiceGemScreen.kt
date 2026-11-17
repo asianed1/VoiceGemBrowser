@@ -131,8 +131,18 @@ fun VoiceGemScreen(
     val isRadioDucked by viewModel.isRadioDucked.collectAsState()
     val radioStatusDetail by viewModel.radioStatusDetail.collectAsState()
     val preferredPodcasts by viewModel.preferredPodcasts.collectAsState()
+    val podcastEpisodes by viewModel.podcastEpisodes.collectAsState()
+    val currentEpisodeIndex by viewModel.currentEpisodeIndex.collectAsState()
+    val currentEpisodeTitle by viewModel.currentEpisodeTitle.collectAsState()
+    val currentPositionMs by viewModel.currentPositionMs.collectAsState()
+    val durationMs by viewModel.durationMs.collectAsState()
+    val sleepTimerRemainingSec by viewModel.sleepTimerRemainingSec.collectAsState()
+    val sleepAtEndOfEpisode by viewModel.sleepAtEndOfEpisode.collectAsState()
     val unreadMessagesCount by viewModel.unreadMessagesCount.collectAsState()
     val capturedMessages by viewModel.capturedMessages.collectAsState()
+    val filteredMessages by viewModel.filteredMessages.collectAsState()
+    val spamFilterEnabled by viewModel.spamFilterEnabled.collectAsState()
+    val mutedSenders by viewModel.mutedSenders.collectAsState()
     val carAudioStatus by viewModel.carAudioStatus.collectAsState()
     val voiceGender by viewModel.voiceGender.collectAsState()
     val pendingGoogleSearchQuery by viewModel.pendingGoogleSearchQuery.collectAsState()
@@ -443,18 +453,27 @@ fun VoiceGemScreen(
                                     text = currentRadioStation?.name ?: "Public Radio",
                                     fontWeight = FontWeight.Bold,
                                     fontSize = 13.sp,
-                                    color = Color.White
+                                    color = Color.White,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
                                 )
                                 Text(
                                     text = when {
                                         !radioStatusDetail.isNullOrBlank() -> radioStatusDetail!!
                                         isRadioDucked -> "Voice Priority: Ducked to 15%"
                                         isRadioLoading -> "Buffering stream…"
+                                        !currentEpisodeTitle.isNullOrBlank() -> currentEpisodeTitle!!
+                                        sleepTimerRemainingSec != null -> {
+                                            val mins = (sleepTimerRemainingSec ?: 0) / 60
+                                            "Streaming • Sleep ${mins}m"
+                                        }
                                         isRadioPlaying -> "Live Stream (100% Vol)"
                                         else -> "Paused — tap ▶ to resume"
                                     },
                                     fontSize = 11.sp,
-                                    color = if (isRadioDucked) GemViolet else GemCyan.copy(alpha = 0.8f)
+                                    color = if (isRadioDucked) GemViolet else GemCyan.copy(alpha = 0.8f),
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
                                 )
                             }
                         }
@@ -755,14 +774,30 @@ fun VoiceGemScreen(
             currentStation = currentRadioStation,
             isDucked = isRadioDucked,
             preferredPodcasts = preferredPodcasts,
+            episodes = podcastEpisodes,
+            currentEpisodeIndex = currentEpisodeIndex,
+            currentPositionMs = currentPositionMs,
+            durationMs = durationMs,
+            sleepTimerRemainingSec = sleepTimerRemainingSec,
+            sleepAtEndOfEpisode = sleepAtEndOfEpisode,
             onSelectStation = { station ->
                 ensurePlaybackNotificationPermission()
                 viewModel.playRadioStation(station)
+            },
+            onSelectEpisode = { idx ->
+                ensurePlaybackNotificationPermission()
+                viewModel.selectPodcastEpisode(idx)
             },
             onTogglePlayPause = {
                 ensurePlaybackNotificationPermission()
                 viewModel.toggleRadioPlayPause()
             },
+            onSeekBackward = { viewModel.seekRadioBy(-15_000L) },
+            onSeekForward = { viewModel.seekRadioBy(30_000L) },
+            onSeekTo = { targetMs -> viewModel.seekRadioTo(targetMs) },
+            onSetSleepTimerMinutes = { mins -> viewModel.setSleepTimerMinutes(mins) },
+            onSetSleepAtEndOfEpisode = { viewModel.setSleepAtEndOfEpisode() },
+            onCancelSleepTimer = { viewModel.cancelSleepTimer() },
             onStopRadio = { viewModel.stopRadio() },
             onUpdatePodcastSlot = { slotNum, name, genre, url, emoji ->
                 viewModel.updatePodcastSlot(slotNum, name, genre, url, emoji)
@@ -777,11 +812,19 @@ fun VoiceGemScreen(
     if (showMessagesSheet) {
         MessagesSummarySheet(
             messages = capturedMessages,
+            filteredMessages = filteredMessages,
+            spamFilterEnabled = spamFilterEnabled,
+            mutedSenders = mutedSenders,
             onSummarizeAndSpeak = {
                 showMessagesSheet = false
                 viewModel.summarizeIncomingMessages()
             },
             onClearMessages = { viewModel.clearCapturedMessages() },
+            onMuteSender = { sender -> viewModel.muteMessageSender(sender) },
+            onUnmuteSender = { sender -> viewModel.unmuteMessageSender(sender) },
+            onToggleSpamFilter = { enabled -> viewModel.setSpamFilterEnabled(enabled) },
+            onRestoreFilteredMessage = { id -> viewModel.restoreFilteredMessage(id) },
+            onClearFilteredMessages = { viewModel.clearFilteredMessages() },
             onDismiss = { showMessagesSheet = false }
         )
     }

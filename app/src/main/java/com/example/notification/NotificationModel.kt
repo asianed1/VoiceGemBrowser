@@ -6,5 +6,6 @@ data class CapturedMessage(
     val appName: String,
     val sender: String,
     val text: String,
-    val timestamp: Long = System.currentTimeMillis()
+    val timestamp: Long = System.currentTimeMillis(),
+    val filterReason: String? = null
 )
