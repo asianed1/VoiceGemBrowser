@@ -1,49 +1,30 @@
 # ==============================================================================
-# VoiceGemBrowser ProGuard / R8 Optimization & Minification Rules
+# VoiceGemBrowser R8 Optimization, Shrinking & Obfuscation Rules (v12.0)
 # ==============================================================================
+# Third-party libraries (Retrofit, OkHttp, Coroutines, Credential Manager, Moshi)
+# ship their own targeted AAR consumer rules. Keeping only specific reflection entry
+# points lets R8 shrink, optimize, and obfuscate unused bytecode cleanly.
 
-# Preserve line numbers and source file names for crash reporting
+# Preserve stack trace source files and line numbers for crash diagnostics
 -keepattributes SourceFile,LineNumberTable
 -keepattributes *Annotation*,Signature,InnerClasses,EnclosingMethod
 
-# Moshi & Moshi Kotlin Reflect
+# Moshi KSP-generated JsonAdapters & annotated models (no kotlin-reflect needed)
 -dontwarn com.squareup.moshi.**
+-keepnames @com.squareup.moshi.JsonClass class com.example.data.model.**
+-keepnames @com.squareup.moshi.JsonClass class com.example.media.**
+-keepnames @com.squareup.moshi.JsonClass class com.example.messaging.**
 -keepclassmembers class * {
     @com.squareup.moshi.Json <fields>;
 }
--keep class com.example.data.model.** { *; }
--keep class com.squareup.moshi.** { *; }
--keep class kotlin.reflect.** { *; }
+-keepclassmembers class * extends com.squareup.moshi.JsonAdapter {
+    public <init>(com.squareup.moshi.Moshi);
+}
 
-# Retrofit 2 & OkHttp 3
+# Retrofit HTTP service interfaces & annotated methods (allow obfuscation of names)
 -dontwarn retrofit2.**
 -dontwarn okhttp3.**
 -dontwarn javax.annotation.**
 -keepclassmembers,allowobfuscation interface * {
     @retrofit2.http.* <methods>;
 }
--keep class retrofit2.** { *; }
--keep class okhttp3.** { *; }
-
-# Google Credential Manager & Google ID Sign-in
--keep class androidx.credentials.** { *; }
--keep class com.google.android.libraries.identity.googleid.** { *; }
-
-# Kotlin Coroutines
--keepclassmembers class kotlinx.coroutines.** { *; }
-
-# Data layer models, preferences & Version 7.0 voice/local modules
--keep class com.example.data.user.** { *; }
--keep class com.example.data.repository.** { *; }
--keep class com.example.media.RadioStation { *; }
--keep class com.example.media.PodcastEpisode { *; }
--keep class com.example.media.PodcastSearchResult { *; }
--keep class com.example.media.ItunesSearchResponse { *; }
--keep class com.example.media.ItunesPodcastItem { *; }
--keep class com.example.notification.CapturedMessage { *; }
--keep class com.example.notification.FilterVerdict { *; }
--keep class com.example.notification.LocalSpamFilter { *; }
--keep class com.example.notification.LocalMessageSynthesizer { *; }
--keep class com.example.security.** { *; }
--keep class com.example.voice.VoiceGenderPreference { *; }
--keep class com.example.voice.VoiceSwitchResult { *; }

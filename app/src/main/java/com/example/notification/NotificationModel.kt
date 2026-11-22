@@ -7,5 +7,7 @@ data class CapturedMessage(
     val sender: String,
     val text: String,
     val timestamp: Long = System.currentTimeMillis(),
-    val filterReason: String? = null
+    val filterReason: String? = null,
+    val canDirectReply: Boolean = false,
+    val notificationKey: String? = null
 )

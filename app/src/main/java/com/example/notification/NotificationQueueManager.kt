@@ -43,6 +43,14 @@ object NotificationQueueManager {
             _messages.value = currentList
             _unreadCount.value = currentList.size
         }
+
+        if (NotificationReplyStore.getEntry(message.id) == null) {
+            NotificationReplyStore.recordReplyTarget(
+                message = message,
+                notificationKey = message.notificationKey,
+                replyAction = null
+            )
+        }
     }
 
     fun addFilteredMessage(message: CapturedMessage, reason: String) {
@@ -108,6 +116,17 @@ object NotificationQueueManager {
             _filteredCount.value = currentList.size
         }
         restored?.let { addMessage(it) }
+    }
+
+    fun removeMessageById(messageId: String) {
+        synchronized(messageQueue) {
+            val removed = messageQueue.removeAll { it.id == messageId }
+            if (removed) {
+                val currentList = messageQueue.toList()
+                _messages.value = currentList
+                _unreadCount.value = currentList.size
+            }
+        }
     }
 
     fun getUnreadMessages(): List<CapturedMessage> {

@@ -25,9 +25,12 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Reply
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Contacts
 import androidx.compose.material.icons.filled.DeleteOutline
+import androidx.compose.material.icons.filled.EditNote
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.MarkEmailUnread
@@ -82,6 +85,7 @@ fun MessagesSummarySheet(
     filteredMessages: List<CapturedMessage> = emptyList(),
     spamFilterEnabled: Boolean = true,
     mutedSenders: Set<String> = emptySet(),
+    quickContactsCount: Int = 0,
     onSummarizeAndSpeak: () -> Unit,
     onClearMessages: () -> Unit,
     onMuteSender: (String) -> Unit = {},
@@ -89,6 +93,9 @@ fun MessagesSummarySheet(
     onToggleSpamFilter: (Boolean) -> Unit = {},
     onRestoreFilteredMessage: (String) -> Unit = {},
     onClearFilteredMessages: () -> Unit = {},
+    onStartVoiceReply: (CapturedMessage) -> Unit = {},
+    onComposeNewMessage: () -> Unit = {},
+    onOpenQuickContacts: () -> Unit = {},
     onDismiss: () -> Unit
 ) {
     val context = LocalContext.current
@@ -208,7 +215,72 @@ fun MessagesSummarySheet(
                 )
             }
 
-            Spacer(modifier = Modifier.height(14.dp))
+            Spacer(modifier = Modifier.height(12.dp))
+
+            // Voice Compose & Quick Contacts Action Row (100% On-Device, Zero Gemini)
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                androidx.compose.material3.OutlinedButton(
+                    onClick = onComposeNewMessage,
+                    border = androidx.compose.foundation.BorderStroke(1.dp, GemCyan),
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier
+                        .weight(1f)
+                        .heightIn(min = 48.dp)
+                        .testTag("compose_new_message_button")
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.EditNote,
+                        contentDescription = null,
+                        tint = GemCyan,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        text = "New Message",
+                        color = GemCyan,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+
+                androidx.compose.material3.OutlinedButton(
+                    onClick = onOpenQuickContacts,
+                    border = androidx.compose.foundation.BorderStroke(1.dp, GemEmerald),
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier
+                        .weight(1f)
+                        .heightIn(min = 48.dp)
+                        .testTag("manage_quick_contacts_button")
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Contacts,
+                        contentDescription = null,
+                        tint = GemEmerald,
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        text = "Contacts ($quickContactsCount)",
+                        color = GemEmerald,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            Text(
+                text = "Voice tips: Say \"Reply to Sarah saying I'm on my way\" or \"WhatsApp John saying hello\" — 100% on-device, zero Gemini.",
+                fontSize = 11.sp,
+                color = TextSecondaryLight,
+                lineHeight = 15.sp
+            )
+
+            Spacer(modifier = Modifier.height(12.dp))
 
             // Action Button: Read & Digest Locally
             if (messages.isNotEmpty()) {
@@ -317,6 +389,7 @@ fun MessagesSummarySheet(
                     items(messages, key = { it.id }) { msg ->
                         MessageItemCard(
                             message = msg,
+                            onReply = { onStartVoiceReply(msg) },
                             onMuteSender = { onMuteSender(msg.sender) }
                         )
                     }
@@ -508,6 +581,7 @@ fun MessagesSummarySheet(
 @Composable
 private fun MessageItemCard(
     message: CapturedMessage,
+    onReply: () -> Unit,
     onMuteSender: () -> Unit
 ) {
     val badgeColor = when {
@@ -559,26 +633,56 @@ private fun MessageItemCard(
                 }
 
                 Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(8.dp))
-                        .background(GemRose.copy(alpha = 0.14f))
-                        .clickable { onMuteSender() }
-                        .padding(horizontal = 8.dp, vertical = 4.dp)
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Icon(
-                        imageVector = Icons.Default.NotificationsOff,
-                        contentDescription = "Mute ${message.sender}",
-                        tint = GemRose,
-                        modifier = Modifier.size(12.dp)
-                    )
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text(
-                        text = "Mute",
-                        fontSize = 10.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        color = GemRose
-                    )
+                    val replyTint = if (message.canDirectReply) GemEmerald else GemCyan
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(replyTint.copy(alpha = 0.16f))
+                            .clickable { onReply() }
+                            .padding(horizontal = 8.dp, vertical = 4.dp)
+                            .testTag("reply_message_button_${message.id}")
+                    ) {
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Filled.Reply,
+                            contentDescription = "Voice Reply to ${message.sender}",
+                            tint = replyTint,
+                            modifier = Modifier.size(12.dp)
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text(
+                            text = if (message.canDirectReply) "Instant Reply" else "Reply",
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = replyTint
+                        )
+                    }
+
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(GemRose.copy(alpha = 0.14f))
+                            .clickable { onMuteSender() }
+                            .padding(horizontal = 8.dp, vertical = 4.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.NotificationsOff,
+                            contentDescription = "Mute ${message.sender}",
+                            tint = GemRose,
+                            modifier = Modifier.size(12.dp)
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text(
+                            text = "Mute",
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = GemRose
+                        )
+                    }
                 }
             }
             Spacer(modifier = Modifier.height(4.dp))

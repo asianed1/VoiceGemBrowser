@@ -6,7 +6,6 @@ import com.example.data.model.GeminiRequest
 import com.example.data.model.GeminiResponse
 import com.example.security.SecureKeyStoreHelper
 import com.squareup.moshi.Moshi
-import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
 import okhttp3.Interceptor
 import okhttp3.OkHttpClient
 import okhttp3.logging.HttpLoggingInterceptor
@@ -69,9 +68,7 @@ object RetrofitClient {
         .addInterceptor(loggingInterceptor)
         .build()
 
-    private val moshi: Moshi = Moshi.Builder()
-        .addLast(KotlinJsonAdapterFactory())
-        .build()
+    private val moshi: Moshi = Moshi.Builder().build()
 
     val service: GeminiApiService by lazy {
         Retrofit.Builder()

@@ -73,12 +73,20 @@ class VoiceGemNotificationListenerService : NotificationListenerService() {
             promoFilterEnabled = spamPrefs.isSpamFilterEnabledSync()
         )
 
+        val replyAction = if (verdict == FilterVerdict.ALLOW) {
+            NotificationReplyStore.extractBestReplyAction(notification)
+        } else {
+            null
+        }
+
         val captured = CapturedMessage(
             packageName = packageName,
             appName = appLabel,
             sender = title,
             text = text,
-            timestamp = System.currentTimeMillis()
+            timestamp = System.currentTimeMillis(),
+            canDirectReply = replyAction != null,
+            notificationKey = sbn.key
         )
 
         when (verdict) {
@@ -96,9 +104,19 @@ class VoiceGemNotificationListenerService : NotificationListenerService() {
             }
             FilterVerdict.ALLOW -> {
                 Log.d("VoiceGemNotif", "Queued unread message from $appLabel")
+                NotificationReplyStore.recordReplyTarget(
+                    message = captured,
+                    notificationKey = sbn.key,
+                    replyAction = replyAction
+                )
                 NotificationQueueManager.addMessage(captured)
             }
         }
+    }
+
+    override fun onNotificationRemoved(sbn: StatusBarNotification?) {
+        super.onNotificationRemoved(sbn)
+        NotificationReplyStore.onNotificationRemoved(sbn?.key)
     }
 
     override fun onListenerConnected() {

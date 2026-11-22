@@ -8,7 +8,6 @@ import com.example.data.model.MessageSender
 import com.example.data.repository.GeminiRepository
 import com.example.data.user.UserManager
 import com.squareup.moshi.Moshi
-import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -47,9 +46,7 @@ class VoiceGemLogicTest {
 
     @Test
     fun testMoshi_serializesAndDeserializesGeminiResponse() {
-        val moshi = Moshi.Builder()
-            .addLast(KotlinJsonAdapterFactory())
-            .build()
+        val moshi = Moshi.Builder().build()
         val adapter = moshi.adapter(GeminiResponse::class.java)
 
         val json = """

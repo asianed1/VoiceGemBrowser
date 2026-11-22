@@ -91,8 +91,10 @@ import com.example.ui.components.CarStereoAudioSheet
 import com.example.ui.components.ConversationHistorySheet
 import com.example.ui.components.GoogleAuthOnboardingDialog
 import com.example.ui.components.MessagesSummarySheet
+import com.example.ui.components.QuickContactsSheet
 import com.example.ui.components.RadioStationsSheet
 import com.example.ui.components.TextInputFallbackDialog
+import com.example.ui.components.VoiceComposeCard
 import com.example.ui.components.VoiceGemOrb
 import com.example.ui.theme.GemCardBorder
 import com.example.ui.theme.GemCyan
@@ -146,6 +148,8 @@ fun VoiceGemScreen(
     val carAudioStatus by viewModel.carAudioStatus.collectAsState()
     val voiceGender by viewModel.voiceGender.collectAsState()
     val pendingGoogleSearchQuery by viewModel.pendingGoogleSearchQuery.collectAsState()
+    val messagingDraft by viewModel.messagingDraft.collectAsState()
+    val quickContacts by viewModel.quickContacts.collectAsState()
 
     var showHistorySheet by remember { mutableStateOf(false) }
     var showSettingsDialog by remember { mutableStateOf(false) }
@@ -153,6 +157,7 @@ fun VoiceGemScreen(
     var showAccountSheet by remember { mutableStateOf(false) }
     var showRadioSheet by remember { mutableStateOf(false) }
     var showMessagesSheet by remember { mutableStateOf(false) }
+    var showQuickContactsSheet by remember { mutableStateOf(false) }
     var showCarAudioSheet by remember { mutableStateOf(false) }
 
     // Audio recording permission launcher
@@ -591,6 +596,26 @@ fun VoiceGemScreen(
                 }
             )
 
+            // Active Zero-Gemini Spoken Reply / New Message Compose Draft Card
+            val activeDraft = messagingDraft
+            if (activeDraft != null) {
+                Spacer(modifier = Modifier.height(10.dp))
+                VoiceComposeCard(
+                    draft = activeDraft,
+                    quickContacts = quickContacts,
+                    isListening = state == AssistantState.LISTENING,
+                    onChannelSelected = { viewModel.updateMessagingDraftChannel(it) },
+                    onRecipientChanged = { name, phone, email ->
+                        viewModel.updateMessagingDraftRecipient(name, phone, email)
+                    },
+                    onQuickContactSelected = { viewModel.selectQuickContactForDraft(it) },
+                    onBodyChanged = { viewModel.updateMessagingDraftBody(it) },
+                    onDictateClick = { viewModel.dictateMessagingDraftBody() },
+                    onSendClick = { viewModel.confirmAndSendDraft(context) },
+                    onCancelClick = { viewModel.cancelMessagingDraft() }
+                )
+            }
+
             // Approach B: Explicit Exit Warning Card before opening visual Google Search
             val activeGoogleQuery = pendingGoogleSearchQuery
             if (!activeGoogleQuery.isNullOrBlank()) {
@@ -815,6 +840,7 @@ fun VoiceGemScreen(
             filteredMessages = filteredMessages,
             spamFilterEnabled = spamFilterEnabled,
             mutedSenders = mutedSenders,
+            quickContactsCount = quickContacts.size,
             onSummarizeAndSpeak = {
                 showMessagesSheet = false
                 viewModel.summarizeIncomingMessages()
@@ -825,7 +851,32 @@ fun VoiceGemScreen(
             onToggleSpamFilter = { enabled -> viewModel.setSpamFilterEnabled(enabled) },
             onRestoreFilteredMessage = { id -> viewModel.restoreFilteredMessage(id) },
             onClearFilteredMessages = { viewModel.clearFilteredMessages() },
+            onStartVoiceReply = { msg ->
+                showMessagesSheet = false
+                viewModel.startVoiceReplyForMessage(msg)
+            },
+            onComposeNewMessage = {
+                showMessagesSheet = false
+                viewModel.startNewMessageCompose()
+            },
+            onOpenQuickContacts = {
+                showMessagesSheet = false
+                showQuickContactsSheet = true
+            },
             onDismiss = { showMessagesSheet = false }
+        )
+    }
+
+    if (showQuickContactsSheet) {
+        QuickContactsSheet(
+            contacts = quickContacts,
+            onAddContact = { viewModel.addQuickContact(it) },
+            onDeleteContact = { viewModel.deleteQuickContact(it) },
+            onComposeToContact = { contact ->
+                showQuickContactsSheet = false
+                viewModel.startNewMessageCompose(prefillContact = contact)
+            },
+            onDismiss = { showQuickContactsSheet = false }
         )
     }
 
@@ -1033,7 +1084,7 @@ private fun VoiceConversationHUD(
                 )
             } else if (state == AssistantState.IDLE) {
                 Text(
-                    text = "Mic stays off to protect privacy and save battery. Tap Speak, tap the Gem, or say \"Hey Google, open VoiceGem\" when ready.",
+                    text = "Tap Speak or the Gem to ask a question, play a podcast, check unread messages, or say \"Reply back\" / \"Send SMS to…\" hands-free.",
                     fontSize = 13.sp,
                     color = TextSecondaryLight,
                     textAlign = TextAlign.Center,

@@ -25,9 +25,22 @@ import com.example.media.RadioServiceBridge
 import com.example.media.RadioStation
 import com.example.media.RadioStreamManager
 import com.example.media.VoiceAudioFocusManager
+import com.example.messaging.ComposeStage
+import com.example.messaging.ConfirmationAction
+import com.example.messaging.LocalMessagingParser
+import com.example.messaging.MessagingChannel
+import com.example.messaging.MessagingDraft
+import com.example.messaging.MessagingIntentLauncher
+import com.example.messaging.MessagingMode
+import com.example.messaging.NewMessageParseResult
+import com.example.messaging.QuickContact
+import com.example.messaging.QuickContactsRepository
+import com.example.messaging.ReplyCommandParseResult
 import com.example.notification.CapturedMessage
+import com.example.notification.DirectReplyOutcome
 import com.example.notification.LocalMessageSynthesizer
 import com.example.notification.NotificationQueueManager
+import com.example.notification.NotificationReplyStore
 import com.example.notification.SpamFilterPreferences
 import com.example.voice.SoundFxManager
 import com.example.voice.VoiceGenderPreference
@@ -83,6 +96,12 @@ class VoiceGemViewModel(application: Application) : AndroidViewModel(application
     val filteredMessages: StateFlow<List<CapturedMessage>> = NotificationQueueManager.filteredMessages
     val spamFilterEnabled: StateFlow<Boolean> = spamFilterPrefs.spamFilterEnabled
     val mutedSenders: StateFlow<Set<String>> = spamFilterPrefs.mutedSenders
+
+    // Zero-Gemini Voice Reply & New Message Composer state
+    private val quickContactsRepo = QuickContactsRepository(application)
+    val quickContacts: StateFlow<List<QuickContact>> = quickContactsRepo.contacts
+    private val _messagingDraft = MutableStateFlow<MessagingDraft?>(null)
+    val messagingDraft: StateFlow<MessagingDraft?> = _messagingDraft.asStateFlow()
 
     fun clearCapturedMessages() {
         NotificationQueueManager.clearQueue()
@@ -368,7 +387,7 @@ class VoiceGemViewModel(application: Application) : AndroidViewModel(application
         }
     }
 
-    private fun startListeningSequence() {
+    private fun startListeningSequence(dictationMode: Boolean = false) {
         if (!_hasMicPermission.value) return
         listeningWatchdogJob?.cancel()
         hasDetectedSpeechInTurn = false
@@ -378,13 +397,13 @@ class VoiceGemViewModel(application: Application) : AndroidViewModel(application
         radioManager.duck(true)
         soundFx.playListeningCue()
         _assistantState.value = AssistantState.LISTENING
-        _statusText.value = "Listening (5s window)…"
+        _statusText.value = if (dictationMode) "Dictating message…" else "Listening (5s window)…"
         _liveTranscript.value = ""
-        voiceRecognizer.startListening()
+        voiceRecognizer.startListening(dictationMode = dictationMode)
 
-        // Hard 5-second silence auto-off timer so the mic never stays open unintentionally
+        val timeoutMs = if (dictationMode) DICTATION_SILENCE_TIMEOUT_MS else LISTENING_SILENCE_TIMEOUT_MS
         listeningWatchdogJob = viewModelScope.launch {
-            delay(LISTENING_SILENCE_TIMEOUT_MS)
+            delay(timeoutMs)
             if (_assistantState.value == AssistantState.LISTENING && !hasDetectedSpeechInTurn) {
                 voiceRecognizer.cancel()
                 _rmsLevel.value = 0f
@@ -434,7 +453,14 @@ class VoiceGemViewModel(application: Application) : AndroidViewModel(application
 
         val normalized = question.lowercase(Locale.US).replace(Regex("""[^a-z0-9\s]"""), "")
 
-        // 0. Handle spoken confirmation for pending Visual Google Search handoff (Approach B)
+        // 0a. Active Multi-Turn Voice Messaging / Reply Draft (100% On-Device, Zero Gemini)
+        val activeDraft = _messagingDraft.value
+        if (activeDraft != null) {
+            handleSpokenDraftTurn(activeDraft, question, normalized)
+            return
+        }
+
+        // 0b. Handle spoken confirmation for pending Visual Google Search handoff (Approach B)
         val pendingQuery = _pendingGoogleSearchQuery.value
         if (pendingQuery != null) {
             if (normalized == "open google" || normalized == "open google search" ||
@@ -470,6 +496,22 @@ class VoiceGemViewModel(application: Application) : AndroidViewModel(application
         if (LocalCommandParser.isMessageSummaryCommand(normalized)) {
             _currentQuestion.value = question
             summarizeIncomingMessages()
+            return
+        }
+
+        // 3b. 100% Local Spoken Reply to Notification (RemoteInput silent reply or pre-filled fallback)
+        val replyCommand = LocalMessagingParser.parseReplyCommand(question)
+        if (replyCommand != null) {
+            _currentQuestion.value = question
+            startReplyFromVoice(replyCommand)
+            return
+        }
+
+        // 3c. 100% Local Spoken New Message Compose (SMS, WhatsApp, Telegram, Viber, Gmail)
+        val composeCommand = LocalMessagingParser.parseNewMessageCommand(question, quickContacts.value)
+        if (composeCommand != null) {
+            _currentQuestion.value = question
+            startNewMessageFromVoice(composeCommand)
             return
         }
 
@@ -714,6 +756,430 @@ class VoiceGemViewModel(application: Application) : AndroidViewModel(application
         )
     }
 
+    private fun speakAndListen(text: String, dictationMode: Boolean = false) {
+        listeningWatchdogJob?.cancel()
+        audioFocusManager.requestVoicePriorityFocus()
+        radioManager.duck(true)
+
+        _assistantState.value = AssistantState.SPEAKING
+        _spokenAnswer.value = text
+        _statusText.value = "VoiceGem speaking…"
+
+        voiceSpeaker.speak(
+            text = text,
+            utteranceId = "prompt_${System.currentTimeMillis()}",
+            onStart = {
+                _assistantState.value = AssistantState.SPEAKING
+            },
+            onDone = {
+                viewModelScope.launch {
+                    delay(180)
+                    if (_hasMicPermission.value) {
+                        startListeningSequence(dictationMode = dictationMode)
+                    } else {
+                        _assistantState.value = AssistantState.IDLE
+                        audioFocusManager.abandonVoiceFocus()
+                    }
+                }
+            },
+            onError = {
+                viewModelScope.launch {
+                    _assistantState.value = AssistantState.IDLE
+                    audioFocusManager.abandonVoiceFocus()
+                }
+            }
+        )
+    }
+
+    // ==================== Zero-Gemini Spoken Reply & Compose Actions ====================
+
+    private fun startReplyFromVoice(parsed: ReplyCommandParseResult) {
+        voiceRecognizer.stopListening()
+        voiceSpeaker.stop()
+
+        val entry = NotificationReplyStore.findReplyTarget(
+            senderQuery = parsed.targetQuery,
+            appFilter = parsed.channel?.displayName
+        )
+
+        if (entry == null) {
+            val missingMsg = if (!parsed.targetQuery.isNullOrBlank()) {
+                "I couldn't find a recent notification from ${parsed.targetQuery} to reply to. Say send a message to ${parsed.targetQuery} instead."
+            } else {
+                "There are no recent notifications to reply to right now."
+            }
+            _spokenAnswer.value = missingMsg
+            speakResponse(missingMsg)
+            return
+        }
+
+        val targetMsg = entry.message
+        val channel = MessagingChannel.fromAppNameOrPackage(targetMsg.appName, targetMsg.packageName)
+        val hasRemoteInput = entry.replyAction != null
+        val body = parsed.messageBody?.trim().orEmpty()
+
+        val draft = MessagingDraft(
+            mode = MessagingMode.SILENT_REPLY,
+            stage = if (body.isNotBlank()) ComposeStage.AWAITING_CONFIRMATION else ComposeStage.DICTATING_BODY,
+            channel = channel,
+            recipientName = targetMsg.sender,
+            messageBody = body,
+            replyMessageId = targetMsg.id,
+            replyPackageName = targetMsg.packageName,
+            hasDirectRemoteInput = hasRemoteInput,
+            originalMessageSnippet = targetMsg.text
+        )
+        _messagingDraft.value = draft
+
+        if (draft.stage == ComposeStage.AWAITING_CONFIRMATION) {
+            speakAndListen(buildConfirmationPrompt(draft), dictationMode = false)
+        } else {
+            val modeHint = if (hasRemoteInput) "directly in VoiceGem" else "via ${channel.displayName}"
+            speakAndListen(
+                "Replying to ${targetMsg.sender} on ${targetMsg.appName} $modeHint. What would you like to say?",
+                dictationMode = true
+            )
+        }
+    }
+
+    private fun startNewMessageFromVoice(parsed: NewMessageParseResult) {
+        voiceRecognizer.stopListening()
+        voiceSpeaker.stop()
+
+        val hasAnyRecipient = parsed.recipientPhone.isNotBlank() ||
+            parsed.recipientEmail.isNotBlank() ||
+            parsed.recipientName.isNotBlank()
+
+        val stage = when {
+            !hasAnyRecipient -> ComposeStage.NEEDS_RECIPIENT
+            parsed.messageBody.isBlank() -> ComposeStage.DICTATING_BODY
+            else -> ComposeStage.AWAITING_CONFIRMATION
+        }
+
+        val draft = MessagingDraft(
+            mode = MessagingMode.NEW_MESSAGE,
+            stage = stage,
+            channel = parsed.channel,
+            recipientName = parsed.recipientName,
+            recipientPhone = parsed.recipientPhone,
+            recipientEmail = parsed.recipientEmail,
+            messageBody = parsed.messageBody
+        )
+        _messagingDraft.value = draft
+
+        when (stage) {
+            ComposeStage.NEEDS_RECIPIENT -> {
+                val prompt = if (parsed.channel == MessagingChannel.GMAIL) {
+                    "Who should I email? Speak their name from Quick Contacts or their email address."
+                } else {
+                    "Who would you like to message on ${parsed.channel.displayName}? Speak a Quick Contact name or phone number."
+                }
+                speakAndListen(prompt, dictationMode = false)
+            }
+            ComposeStage.DICTATING_BODY -> {
+                val targetLabel = draft.recipientName.ifBlank {
+                    draft.recipientEmail.ifBlank { draft.recipientPhone }
+                }
+                speakAndListen(
+                    "Composing ${draft.channel.displayName} message to $targetLabel. What should it say?",
+                    dictationMode = true
+                )
+            }
+            ComposeStage.AWAITING_CONFIRMATION -> {
+                speakAndListen(buildConfirmationPrompt(draft), dictationMode = false)
+            }
+        }
+    }
+
+    private fun handleSpokenDraftTurn(
+        draft: MessagingDraft,
+        rawUtterance: String,
+        normalized: String
+    ) {
+        voiceRecognizer.stopListening()
+        voiceSpeaker.stop()
+        _currentQuestion.value = rawUtterance
+
+        when (draft.stage) {
+            ComposeStage.AWAITING_CONFIRMATION -> {
+                val switchedChannel = detectDraftChannelSwitch(normalized)
+                if (switchedChannel != null && draft.mode == MessagingMode.NEW_MESSAGE) {
+                    val updated = draft.copy(channel = switchedChannel)
+                    _messagingDraft.value = updated
+                    speakAndListen(buildConfirmationPrompt(updated), dictationMode = false)
+                    return
+                }
+                when (LocalMessagingParser.detectConfirmationAction(normalized)) {
+                    ConfirmationAction.SEND -> confirmAndSendDraft(getApplication())
+                    ConfirmationAction.EDIT -> {
+                        val updated = draft.copy(stage = ComposeStage.DICTATING_BODY, messageBody = "")
+                        _messagingDraft.value = updated
+                        speakAndListen("Okay, go ahead and dictate your new message.", dictationMode = true)
+                    }
+                    ConfirmationAction.CANCEL -> {
+                        _messagingDraft.value = null
+                        _spokenAnswer.value = "Message cancelled."
+                        speakResponse("Message cancelled.")
+                    }
+                    null -> {
+                        if (LocalCommandParser.isExitCommand(normalized)) {
+                            _messagingDraft.value = null
+                            endChat(spokenFarewell = true)
+                        } else {
+                            speakAndListen(
+                                "Say Send to deliver, Edit to rewrite, or Cancel to discard.",
+                                dictationMode = false
+                            )
+                        }
+                    }
+                }
+            }
+            ComposeStage.DICTATING_BODY -> {
+                val action = LocalMessagingParser.detectConfirmationAction(normalized)
+                if (action == ConfirmationAction.CANCEL) {
+                    _messagingDraft.value = null
+                    _spokenAnswer.value = "Message cancelled."
+                    speakResponse("Message cancelled.")
+                    return
+                }
+                if (normalized == "exit" || normalized == "quit" || normalized == "end chat") {
+                    _messagingDraft.value = null
+                    endChat(spokenFarewell = true)
+                    return
+                }
+                val updated = draft.copy(
+                    stage = ComposeStage.AWAITING_CONFIRMATION,
+                    messageBody = rawUtterance.trim()
+                )
+                _messagingDraft.value = updated
+                speakAndListen(buildConfirmationPrompt(updated), dictationMode = false)
+            }
+            ComposeStage.NEEDS_RECIPIENT -> {
+                if (LocalMessagingParser.detectConfirmationAction(normalized) == ConfirmationAction.CANCEL) {
+                    _messagingDraft.value = null
+                    _spokenAnswer.value = "Message cancelled."
+                    speakResponse("Message cancelled.")
+                    return
+                }
+                val parsedEmail = LocalMessagingParser.parseSpokenEmail(rawUtterance).orEmpty()
+                val parsedPhone = if (parsedEmail.isEmpty()) {
+                    LocalMessagingParser.parseSpokenPhoneNumber(rawUtterance).orEmpty()
+                } else ""
+                val matchedContact = if (parsedEmail.isEmpty() && parsedPhone.isEmpty()) {
+                    QuickContactsRepository.findBestMatch(rawUtterance, quickContacts.value)
+                } else null
+
+                val updatedChannel = when {
+                    parsedEmail.isNotBlank() -> MessagingChannel.GMAIL
+                    matchedContact != null && draft.channel == MessagingChannel.SMS -> matchedContact.preferredChannel
+                    else -> draft.channel
+                }
+
+                val updated = draft.copy(
+                    channel = updatedChannel,
+                    recipientName = matchedContact?.displayName
+                        ?: parsedEmail.ifBlank { parsedPhone.ifBlank { rawUtterance.trim() } },
+                    recipientPhone = parsedPhone.ifBlank { matchedContact?.phoneNumber.orEmpty() },
+                    recipientEmail = parsedEmail.ifBlank { matchedContact?.emailAddress.orEmpty() },
+                    stage = if (draft.messageBody.isBlank()) ComposeStage.DICTATING_BODY else ComposeStage.AWAITING_CONFIRMATION
+                )
+                _messagingDraft.value = updated
+
+                if (updated.stage == ComposeStage.DICTATING_BODY) {
+                    speakAndListen(
+                        "Got it, ${updated.recipientName}. What would you like to say?",
+                        dictationMode = true
+                    )
+                } else {
+                    speakAndListen(buildConfirmationPrompt(updated), dictationMode = false)
+                }
+            }
+        }
+    }
+
+    private fun buildConfirmationPrompt(draft: MessagingDraft): String {
+        val target = draft.recipientName.ifBlank {
+            draft.recipientEmail.ifBlank { draft.recipientPhone.ifBlank { "your contact" } }
+        }
+        val deliveryNote = if (draft.mode == MessagingMode.SILENT_REPLY && draft.hasDirectRemoteInput) {
+            "Send reply to $target on ${draft.channel.displayName} saying: ${draft.messageBody}. Say Send, Edit, or Cancel."
+        } else {
+            "Prepare ${draft.channel.displayName} message to $target saying: ${draft.messageBody}. Say Send to open and confirm, Edit, or Cancel."
+        }
+        return deliveryNote
+    }
+
+    fun startVoiceReplyForMessage(message: CapturedMessage) {
+        val entry = NotificationReplyStore.getEntry(message.id)
+        val hasDirect = entry?.replyAction != null
+        val channel = MessagingChannel.fromAppNameOrPackage(message.appName, message.packageName)
+        val draft = MessagingDraft(
+            mode = MessagingMode.SILENT_REPLY,
+            stage = ComposeStage.DICTATING_BODY,
+            channel = channel,
+            recipientName = message.sender,
+            messageBody = "",
+            replyMessageId = message.id,
+            replyPackageName = message.packageName,
+            hasDirectRemoteInput = hasDirect,
+            originalMessageSnippet = message.text
+        )
+        _messagingDraft.value = draft
+        if (_hasMicPermission.value && voiceSpeaker.isReady) {
+            speakAndListen(
+                "Dictate your reply to ${message.sender} on ${message.appName}.",
+                dictationMode = true
+            )
+        }
+    }
+
+    fun startNewMessageCompose(prefillContact: QuickContact? = null) {
+        val draft = if (prefillContact != null) {
+            MessagingDraft(
+                mode = MessagingMode.NEW_MESSAGE,
+                stage = ComposeStage.DICTATING_BODY,
+                channel = prefillContact.preferredChannel,
+                recipientName = prefillContact.displayName,
+                recipientPhone = prefillContact.phoneNumber,
+                recipientEmail = prefillContact.emailAddress
+            )
+        } else {
+            MessagingDraft(
+                mode = MessagingMode.NEW_MESSAGE,
+                stage = ComposeStage.DICTATING_BODY,
+                channel = MessagingChannel.SMS
+            )
+        }
+        _messagingDraft.value = draft
+        _statusText.value = "Composing message…"
+    }
+
+    fun updateMessagingDraftChannel(channel: MessagingChannel) {
+        val current = _messagingDraft.value ?: return
+        _messagingDraft.value = current.copy(channel = channel)
+    }
+
+    fun updateMessagingDraftRecipient(name: String, phone: String, email: String) {
+        val current = _messagingDraft.value ?: return
+        _messagingDraft.value = current.copy(
+            recipientName = name,
+            recipientPhone = phone,
+            recipientEmail = email
+        )
+    }
+
+    fun selectQuickContactForDraft(contact: QuickContact) {
+        val current = _messagingDraft.value ?: return
+        _messagingDraft.value = current.copy(
+            channel = contact.preferredChannel,
+            recipientName = contact.displayName,
+            recipientPhone = contact.phoneNumber,
+            recipientEmail = contact.emailAddress,
+            stage = if (current.messageBody.isBlank()) ComposeStage.DICTATING_BODY else ComposeStage.AWAITING_CONFIRMATION
+        )
+    }
+
+    fun updateMessagingDraftBody(body: String) {
+        val current = _messagingDraft.value ?: return
+        _messagingDraft.value = current.copy(
+            messageBody = body,
+            stage = if (body.isNotBlank()) ComposeStage.AWAITING_CONFIRMATION else ComposeStage.DICTATING_BODY
+        )
+    }
+
+    private fun detectDraftChannelSwitch(normalized: String): MessagingChannel? {
+        val switchPrefixes = listOf("use ", "switch to ", "send via ", "via ", "using ", "change to ")
+        if (switchPrefixes.none { normalized.startsWith(it) || normalized.contains(it) }) return null
+        return when {
+            normalized.contains("whatsapp") -> MessagingChannel.WHATSAPP
+            normalized.contains("telegram") -> MessagingChannel.TELEGRAM
+            normalized.contains("viber") -> MessagingChannel.VIBER
+            normalized.contains("gmail") || normalized.contains("email") -> MessagingChannel.GMAIL
+            normalized.contains("sms") || normalized.contains("text") -> MessagingChannel.SMS
+            else -> null
+        }
+    }
+
+    fun dictateMessagingDraftBody() {
+        val current = _messagingDraft.value ?: return
+        if (_assistantState.value == AssistantState.LISTENING) {
+            listeningWatchdogJob?.cancel()
+            voiceRecognizer.stopListening()
+            return
+        }
+        _messagingDraft.value = current.copy(stage = ComposeStage.DICTATING_BODY)
+        if (_hasMicPermission.value) {
+            startListeningSequence(dictationMode = true)
+        }
+    }
+
+    fun confirmAndSendDraft(context: Context) {
+        val draft = _messagingDraft.value ?: return
+        listeningWatchdogJob?.cancel()
+        voiceRecognizer.stopListening()
+        voiceSpeaker.stop()
+
+        val cleanBody = draft.messageBody.trim()
+        if (cleanBody.isBlank()) {
+            val prompt = "Your message is empty. Please speak or type a message first."
+            _spokenAnswer.value = prompt
+            speakResponse(prompt)
+            return
+        }
+
+        if (draft.mode == MessagingMode.SILENT_REPLY && !draft.replyMessageId.isNullOrBlank()) {
+            when (NotificationReplyStore.sendDirectReply(context, draft.replyMessageId, cleanBody)) {
+                DirectReplyOutcome.Sent -> {
+                    NotificationQueueManager.removeMessageById(draft.replyMessageId)
+                    _messagingDraft.value = null
+                    val confirmation = "Reply sent to ${draft.recipientName} on ${draft.channel.displayName}."
+                    _spokenAnswer.value = confirmation
+                    _statusText.value = confirmation
+                    speakResponse(confirmation)
+                    return
+                }
+                DirectReplyOutcome.Expired, DirectReplyOutcome.NoDirectReplyAction -> {
+                    // Fall through to zero-permission pre-filled Intent handoff
+                }
+            }
+        }
+
+        val launchResult = MessagingIntentLauncher.launchPreFilledCompose(
+            context = context,
+            draft = draft.copy(messageBody = cleanBody)
+        )
+        _messagingDraft.value = null
+        _spokenAnswer.value = launchResult.feedbackMessage
+        _statusText.value = launchResult.feedbackMessage
+        speakResponse(launchResult.feedbackMessage)
+    }
+
+    fun cancelMessagingDraft() {
+        listeningWatchdogJob?.cancel()
+        voiceRecognizer.cancel()
+        voiceSpeaker.stop()
+        _rmsLevel.value = 0f
+        _liveTranscript.value = ""
+        _messagingDraft.value = null
+        _assistantState.value = AssistantState.IDLE
+        _statusText.value = "Message draft discarded."
+        audioFocusManager.abandonVoiceFocus()
+    }
+
+    fun addQuickContact(contact: QuickContact): Boolean {
+        return quickContactsRepo.addOrUpdateContact(contact)
+    }
+
+    fun deleteQuickContact(contactId: String) {
+        quickContactsRepo.deleteContact(contactId)
+    }
+
+    fun importPickedQuickContact(context: Context, uri: Uri): QuickContact? {
+        val extracted = QuickContactsRepository.extractFromPickedUri(context, uri) ?: return null
+        quickContactsRepo.addOrUpdateContact(extracted)
+        return extracted
+    }
+
     /**
      * Strictly 100% On-Device Unread Message Synthesis.
      * Private messages from WhatsApp, Gmail, SMS, Telegram, Viber, Slack, and Discord
@@ -874,6 +1340,7 @@ class VoiceGemViewModel(application: Application) : AndroidViewModel(application
         _liveTranscript.value = ""
         _rmsLevel.value = 0f
         _pendingGoogleSearchQuery.value = null
+        _messagingDraft.value = null
         _assistantState.value = AssistantState.IDLE
         _statusText.value = "Mic off · Tap Speak, Gem, or Hey Google"
         soundFx.playShutdownCue()
@@ -939,6 +1406,7 @@ class VoiceGemViewModel(application: Application) : AndroidViewModel(application
 
     companion object {
         const val LISTENING_SILENCE_TIMEOUT_MS = 5_000L
+        const val DICTATION_SILENCE_TIMEOUT_MS = 8_000L
         const val MAX_QUERY_LENGTH = 1500
     }
 }

@@ -112,12 +112,15 @@ class VoiceRecognizer(
         }
     }
 
-    fun startListening() {
+    fun startListening(dictationMode: Boolean = false) {
         mainHandler.post {
             try {
                 if (speechRecognizer == null) {
                     initRecognizer()
                 }
+
+                val completeSilenceMs = if (dictationMode) 3800L else 2500L
+                val possibleSilenceMs = if (dictationMode) 2800L else 2000L
 
                 val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
                     putExtra(
@@ -127,8 +130,8 @@ class VoiceRecognizer(
                     putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
                     putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 3)
                     putExtra(RecognizerIntent.EXTRA_CALLING_PACKAGE, context.packageName)
-                    putExtra("android.speech.extra.SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS", 2500L)
-                    putExtra("android.speech.extra.SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS", 2000L)
+                    putExtra("android.speech.extra.SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS", completeSilenceMs)
+                    putExtra("android.speech.extra.SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS", possibleSilenceMs)
                 }
 
                 speechRecognizer?.startListening(intent)
